@@ -4,6 +4,16 @@
 
 This repository provides scripts to install a wide range of DevOps tools on both Linux and Windows operating systems. These scripts are designed to make the installation process seamless and straightforward, catering to the needs of DevOps engineers and enthusiasts.
 
+## Features
+
+- Install essential DevOps tools with a single script.
+- Support for multiple Linux distributions: Ubuntu/Debian, CentOS/RHEL, Fedora.
+- Support for Windows operating systems.
+- Choose which tools to install from a list of available options.
+- New additional features:
+  - Support for different Linux distributions and Windows versions.
+  - Let users decide on which OS they are using and want to install tools on.
+
 ## DevOps Tools Included
 
 - Docker
@@ -27,20 +37,20 @@ This repository provides scripts to install a wide range of DevOps tools on both
 
 1. Clone the repository:
 
-    ```sh
+    ```
     git clone https://github.com/NotHarshhaa/DevOps-Tool-Installer.git
     cd DevOps-Tool-Installer
     ```
 
 2. Make the script executable:
 
-    ```sh
+    ```
     chmod +x install_devops_tools.sh
     ```
 
 3. Run the script:
 
-    ```sh
+    ```
     ./install_devops_tools.sh
     ```
 
@@ -48,14 +58,14 @@ This repository provides scripts to install a wide range of DevOps tools on both
 
 1. Clone the repository:
 
-    ```powershell
+    ```
     git clone https://github.com/NotHarshhaa/DevOps-Tool-Installer.git
     cd DevOps-Tool-Installer
     ```
 
 2. Run the script:
 
-    ```powershell
+    ```
     .\install_devops_tools.ps1
     ```
 
