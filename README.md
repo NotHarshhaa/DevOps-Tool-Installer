@@ -34,6 +34,11 @@
   - GitLab Runner 🏃‍♂️
   - HashiCorp Vault 🔐
   - HashiCorp Consul 🌐
+  - Minikube ☸️
+  - Istio 📦
+  - OpenShift CLI ☸️
+  - Packer 📦
+  - Vagrant 📦
 
 ## Usage
 

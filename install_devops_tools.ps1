@@ -24,6 +24,11 @@ Write-Host "  - Grafana 📊"
 Write-Host "  - GitLab Runner 🏃‍♂️"
 Write-Host "  - HashiCorp Vault 🔐"
 Write-Host "  - HashiCorp Consul 🌐"
+Write-Host "  - Minikube ☸️"
+Write-Host "  - Istio 📦"
+Write-Host "  - OpenShift CLI ☸️"
+Write-Host "  - Packer 📦"
+Write-Host "  - Vagrant 📦"
 Write-Host ""
 
 # Function to install Docker
@@ -124,13 +129,13 @@ function Uninstall-GCloud {
 
 # Function to install Helm
 function Install-Helm {
-    choco install helm -y
+    choco install kubernetes-helm -y
     Write-Host "Helm installed successfully."
 }
 
 # Function to uninstall Helm
 function Uninstall-Helm {
-    choco uninstall helm -y
+    choco uninstall kubernetes-helm -y
     Write-Host "Helm uninstalled successfully."
 }
 
@@ -194,6 +199,66 @@ function Uninstall-Consul {
     Write-Host "HashiCorp Consul uninstalled successfully."
 }
 
+# Function to install Minikube
+function Install-Minikube {
+    choco install minikube -y
+    Write-Host "Minikube installed successfully."
+}
+
+# Function to uninstall Minikube
+function Uninstall-Minikube {
+    choco uninstall minikube -y
+    Write-Host "Minikube uninstalled successfully."
+}
+
+# Function to install Istio
+function Install-Istio {
+    choco install istio -y
+    Write-Host "Istio installed successfully."
+}
+
+# Function to uninstall Istio
+function Uninstall-Istio {
+    choco uninstall istio -y
+    Write-Host "Istio uninstalled successfully."
+}
+
+# Function to install OpenShift CLI
+function Install-OpenShiftCLI {
+    choco install openshift-cli -y
+    Write-Host "OpenShift CLI installed successfully."
+}
+
+# Function to uninstall OpenShift CLI
+function Uninstall-OpenShiftCLI {
+    choco uninstall openshift-cli -y
+    Write-Host "OpenShift CLI uninstalled successfully."
+}
+
+# Function to install Packer
+function Install-Packer {
+    choco install packer -y
+    Write-Host "Packer installed successfully."
+}
+
+# Function to uninstall Packer
+function Uninstall-Packer {
+    choco uninstall packer -y
+    Write-Host "Packer uninstalled successfully."
+}
+
+# Function to install Vagrant
+function Install-Vagrant {
+    choco install vagrant -y
+    Write-Host "Vagrant installed successfully."
+}
+
+# Function to uninstall Vagrant
+function Uninstall-Vagrant {
+    choco uninstall vagrant -y
+    Write-Host "Vagrant uninstalled successfully."
+}
+
 # Function to display the main menu and handle user input
 function Main-Menu {
     Write-Host "Choose an action:"
@@ -218,6 +283,11 @@ function Main-Menu {
         Write-Host "12. GitLab Runner"
         Write-Host "13. HashiCorp Vault"
         Write-Host "14. HashiCorp Consul"
+        Write-Host "15. Minikube"
+        Write-Host "16. Istio"
+        Write-Host "17. OpenShift CLI"
+        Write-Host "18. Packer"
+        Write-Host "19. Vagrant"
         $tool_choice = Read-Host "Enter the number corresponding to the tool"
 
         switch ($tool_choice) {
@@ -262,6 +332,21 @@ function Main-Menu {
             }
             14 {
                 if ($action_choice -eq 1) { Install-Consul } else { Uninstall-Consul }
+            }
+            15 {
+                if ($action_choice -eq 1) { Install-Minikube } else { Uninstall-Minikube }
+            }
+            16 {
+                if ($action_choice -eq 1) { Install-Istio } else { Uninstall-Istio }
+            }
+            17 {
+                if ($action_choice -eq 1) { Install-OpenShiftCLI } else { Uninstall-OpenShiftCLI }
+            }
+            18 {
+                if ($action_choice -eq 1) { Install-Packer } else { Uninstall-Packer }
+            }
+            19 {
+                if ($action_choice -eq 1) { Install-Vagrant } else { Uninstall-Vagrant }
             }
             default {
                 Write-Host "Invalid tool choice. Exiting."

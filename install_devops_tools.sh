@@ -26,6 +26,11 @@ echo "  - Grafana 📊"
 echo "  - GitLab Runner 🏃‍♂️"
 echo "  - HashiCorp Vault 🔐"
 echo "  - HashiCorp Consul 🌐"
+echo "  - Istio 🚀"
+echo "  - OpenShift CLI 🚀"
+echo "  - Minikube 🚀"
+echo "  - Packer 🚀"
+echo "  - Vagrant 🚀"
 echo ""
 
 # Function to prompt user for their Linux distribution
@@ -267,8 +272,9 @@ uninstall_helm() {
 # Function to install Prometheus
 install_prometheus() {
   curl -LO https://github.com/prometheus/prometheus/releases/download/v2.26.0/prometheus-2.26.0.linux-amd64.tar.gz
-  tar -xvf prometheus-2.26.0.linux-amd64.tar.gz
+  tar xvf prometheus-2.26.0.linux-amd64.tar.gz
   sudo mv prometheus-2.26.0.linux-amd64 /usr/local/bin/prometheus
+  rm prometheus-2.26.0.linux-amd64.tar.gz
   echo "Prometheus installed successfully."
 }
 
@@ -280,24 +286,48 @@ uninstall_prometheus() {
 
 # Function to install Grafana
 install_grafana() {
-  sudo apt-get install -y software-properties-common
-  sudo apt-add-repository "deb https://packages.grafana.com/oss/deb stable main"
-  sudo apt-get update
-  sudo apt-get install -y grafana
+  case $distro_choice in
+    1)
+      sudo apt-get install -y software-properties-common
+      sudo add-apt-repository "deb https://packages.grafana.com/oss/deb stable main"
+      sudo apt-get update
+      sudo apt-get install -y grafana
+      ;;
+    2|3)
+      sudo yum install -y https://packages.grafana.com/oss/rpm/grafana-7.3.1-1.x86_64.rpm
+      ;;
+    *)
+      echo "Invalid Linux distribution choice. Exiting."
+      exit 1
+      ;;
+  esac
+  sudo systemctl start grafana-server
+  sudo systemctl enable grafana-server
   echo "Grafana installed successfully."
 }
 
 # Function to uninstall Grafana
 uninstall_grafana() {
-  sudo apt-get remove -y grafana
-  sudo apt-get purge -y grafana
+  case $distro_choice in
+    1)
+      sudo apt-get remove -y grafana
+      sudo apt-get purge -y grafana
+      ;;
+    2|3)
+      sudo yum remove -y grafana
+      ;;
+    *)
+      echo "Invalid Linux distribution choice. Exiting."
+      exit 1
+      ;;
+  esac
   echo "Grafana uninstalled successfully."
 }
 
 # Function to install GitLab Runner
 install_gitlab_runner() {
   curl -L --output /usr/local/bin/gitlab-runner https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-linux-amd64
-  sudo chmod +x /usr/local/bin/gitlab-runner
+  chmod +x /usr/local/bin/gitlab-runner
   echo "GitLab Runner installed successfully."
 }
 
@@ -324,10 +354,10 @@ uninstall_vault() {
 
 # Function to install HashiCorp Consul
 install_consul() {
-  curl -LO https://releases.hashicorp.com/consul/1.9.5/consul_1.9.5_linux_amd64.zip
-  unzip consul_1.9.5_linux_amd64.zip
+  curl -LO https://releases.hashicorp.com/consul/1.9.4/consul_1.9.4_linux_amd64.zip
+  unzip consul_1.9.4_linux_amd64.zip
   sudo mv consul /usr/local/bin/
-  rm consul_1.9.5_linux_amd64.zip
+  rm consul_1.9.4_linux_amd64.zip
   echo "HashiCorp Consul installed successfully."
 }
 
@@ -337,17 +367,93 @@ uninstall_consul() {
   echo "HashiCorp Consul uninstalled successfully."
 }
 
-# Function to display the main menu and handle user input
-main_menu() {
-  echo "Choose an action:"
+# Function to install Istio
+install_istio() {
+  curl -L https://istio.io/downloadIstio | ISTIO_VERSION=1.9.5 sh -
+  sudo mv istio-1.9.5/bin/istioctl /usr/local/bin/
+  echo "Istio installed successfully."
+}
+
+# Function to uninstall Istio
+uninstall_istio() {
+  sudo rm /usr/local/bin/istioctl
+  echo "Istio uninstalled successfully."
+}
+
+# Function to install OpenShift CLI
+install_openshift_cli() {
+  curl -LO https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux.tar.gz
+  tar -xvf openshift-client-linux.tar.gz
+  sudo mv oc /usr/local/bin/
+  sudo mv kubectl /usr/local/bin/
+  rm openshift-client-linux.tar.gz
+  echo "OpenShift CLI installed successfully."
+}
+
+# Function to uninstall OpenShift CLI
+uninstall_openshift_cli() {
+  sudo rm /usr/local/bin/oc
+  echo "OpenShift CLI uninstalled successfully."
+}
+
+# Function to install Minikube
+install_minikube() {
+  curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+  sudo install minikube-linux-amd64 /usr/local/bin/minikube
+  echo "Minikube installed successfully."
+}
+
+# Function to uninstall Minikube
+uninstall_minikube() {
+  sudo rm /usr/local/bin/minikube
+  echo "Minikube uninstalled successfully."
+}
+
+# Function to install Packer
+install_packer() {
+  curl -LO https://releases.hashicorp.com/packer/1.7.2/packer_1.7.2_linux_amd64.zip
+  unzip packer_1.7.2_linux_amd64.zip
+  sudo mv packer /usr/local/bin/
+  rm packer_1.7.2_linux_amd64.zip
+  echo "Packer installed successfully."
+}
+
+# Function to uninstall Packer
+uninstall_packer() {
+  sudo rm /usr/local/bin/packer
+  echo "Packer uninstalled successfully."
+}
+
+# Function to install Vagrant
+install_vagrant() {
+  curl -LO https://releases.hashicorp.com/vagrant/2.2.14/vagrant_2.2.14_linux_amd64.zip
+  unzip vagrant_2.2.14_linux_amd64.zip
+  sudo mv vagrant /usr/local/bin/
+  rm vagrant_2.2.14_linux_amd64.zip
+  echo "Vagrant installed successfully."
+}
+
+# Function to uninstall Vagrant
+uninstall_vagrant() {
+  sudo rm /usr/local/bin/vagrant
+  echo "Vagrant uninstalled successfully."
+}
+
+# Prompt user for their Linux distribution
+get_linux_distribution
+
+# Main Menu
+while true; do
+  echo ""
+  echo "Main Menu:"
   echo "1. Install a tool"
   echo "2. Uninstall a tool"
   echo "3. Exit"
-  read -p "Enter your choice: " action_choice
+  read -p "Choose an option: " main_choice
 
-  if [[ $action_choice -eq 1 || $action_choice -eq 2 ]]; then
-    get_linux_distribution
-    echo "Select a tool:"
+  if [[ $main_choice -eq 1 ]]; then
+    echo ""
+    echo "Available tools for installation:"
     echo "1. Docker"
     echo "2. Kubernetes (kubectl)"
     echo "3. Ansible"
@@ -362,64 +468,88 @@ main_menu() {
     echo "12. GitLab Runner"
     echo "13. HashiCorp Vault"
     echo "14. HashiCorp Consul"
-    read -p "Enter the number corresponding to the tool: " tool_choice
+    echo "15. Istio"
+    echo "16. OpenShift CLI"
+    echo "17. Minikube"
+    echo "18. Packer"
+    echo "19. Vagrant"
+    read -p "Enter the number corresponding to the tool you want to install: " install_choice
 
-    case $tool_choice in
-      1)
-        [[ $action_choice -eq 1 ]] && install_docker || uninstall_docker
-        ;;
-      2)
-        [[ $action_choice -eq 1 ]] && install_kubernetes || uninstall_kubernetes
-        ;;
-      3)
-        [[ $action_choice -eq 1 ]] && install_ansible || uninstall_ansible
-        ;;
-      4)
-        [[ $action_choice -eq 1 ]] && install_terraform || uninstall_terraform
-        ;;
-      5)
-        [[ $action_choice -eq 1 ]] && install_jenkins || uninstall_jenkins
-        ;;
-      6)
-        [[ $action_choice -eq 1 ]] && install_awscli || uninstall_awscli
-        ;;
-      7)
-        [[ $action_choice -eq 1 ]] && install_azurecli || uninstall_azurecli
-        ;;
-      8)
-        [[ $action_choice -eq 1 ]] && install_gcloud || uninstall_gcloud
-        ;;
-      9)
-        [[ $action_choice -eq 1 ]] && install_helm || uninstall_helm
-        ;;
-      10)
-        [[ $action_choice -eq 1 ]] && install_prometheus || uninstall_prometheus
-        ;;
-      11)
-        [[ $action_choice -eq 1 ]] && install_grafana || uninstall_grafana
-        ;;
-      12)
-        [[ $action_choice -eq 1 ]] && install_gitlab_runner || uninstall_gitlab_runner
-        ;;
-      13)
-        [[ $action_choice -eq 1 ]] && install_vault || uninstall_vault
-        ;;
-      14)
-        [[ $action_choice -eq 1 ]] && install_consul || uninstall_consul
-        ;;
-      *)
-        echo "Invalid tool choice. Exiting."
-        exit 1
-        ;;
+    case $install_choice in
+      1) install_docker ;;
+      2) install_kubernetes ;;
+      3) install_ansible ;;
+      4) install_terraform ;;
+      5) install_jenkins ;;
+      6) install_awscli ;;
+      7) install_azurecli ;;
+      8) install_gcloud ;;
+      9) install_helm ;;
+      10) install_prometheus ;;
+      11) install_grafana ;;
+      12) install_gitlab_runner ;;
+      13) install_vault ;;
+      14) install_consul ;;
+      15) install_istio ;;
+      16) install_openshift_cli ;;
+      17) install_minikube ;;
+      18) install_packer ;;
+      19) install_vagrant ;;
+      *) echo "Invalid choice. Please try again." ;;
     esac
-  elif [[ $action_choice -eq 3 ]]; then
-    echo "Exiting. Goodbye!"
-    exit 0
-  else
-    echo "Invalid action choice. Exiting."
-    exit 1
-  fi
-}
 
-# Run the main menu
-main_menu
+  elif [[ $main_choice -eq 2 ]]; then
+    echo ""
+    echo "Available tools for uninstallation:"
+    echo "1. Docker"
+    echo "2. Kubernetes (kubectl)"
+    echo "3. Ansible"
+    echo "4. Terraform"
+    echo "5. Jenkins"
+    echo "6. AWS CLI"
+    echo "7. Azure CLI"
+    echo "8. Google Cloud SDK"
+    echo "9. Helm"
+    echo "10. Prometheus"
+    echo "11. Grafana"
+    echo "12. GitLab Runner"
+    echo "13. HashiCorp Vault"
+    echo "14. HashiCorp Consul"
+    echo "15. Istio"
+    echo "16. OpenShift CLI"
+    echo "17. Minikube"
+    echo "18. Packer"
+    echo "19. Vagrant"
+    read -p "Enter the number corresponding to the tool you want to uninstall: " uninstall_choice
+
+    case $uninstall_choice in
+      1) uninstall_docker ;;
+      2) uninstall_kubernetes ;;
+      3) uninstall_ansible ;;
+      4) uninstall_terraform ;;
+      5) uninstall_jenkins ;;
+      6) uninstall_awscli ;;
+      7) uninstall_azurecli ;;
+      8) uninstall_gcloud ;;
+      9) uninstall_helm ;;
+      10) uninstall_prometheus ;;
+      11) uninstall_grafana ;;
+      12) uninstall_gitlab_runner ;;
+      13) uninstall_vault ;;
+      14) uninstall_consul ;;
+      15) uninstall_istio ;;
+      16) uninstall_openshift_cli ;;
+      17) uninstall_minikube ;;
+      18) uninstall_packer ;;
+      19) uninstall_vagrant ;;
+      *) echo "Invalid choice. Please try again." ;;
+    esac
+
+  elif [[ $main_choice -eq 3 ]]; then
+    echo "Exiting."
+    break
+  else
+    echo "Invalid choice. Please try again."
+  fi
+done
+
