@@ -1,8 +1,8 @@
 # DevOps Tool Installer/Uninstaller 🚀
 
-![](https://imgur.com/tP5o7Eu.png)
+![text](https://imgur.com/tP5o7Eu.png)
 
-**This repository provides scripts to install/Uninstall a wide range of DevOps tools on both Linux and Windows operating systems. These scripts are designed to make the installation and uninstallation process seamless and straightforward, catering to the needs of DevOps engineers and enthusiasts.**
+**This repository provides scripts to install/uninstall a wide range of DevOps tools on both Linux and Windows operating systems. These scripts are designed to make the installation and uninstallation process seamless and straightforward, catering to the needs of DevOps engineers and enthusiasts.**
 
 ## Features
 
@@ -13,9 +13,9 @@
   - Support for multiple Linux distributions: Ubuntu/Debian, CentOS/RHEL, Fedora.
   - Support for Windows operating systems.
   - Choose which tools to install or uninstall from a list of available options.
-  - New additional features:
-    - Support for different Linux distributions and Windows versions.
-    - Let users decide on which OS they are using and want to install or uninstall tools on.
+  - **New Features**:
+    - Enhanced support for different Linux distributions and Windows versions.
+    - Users can select their OS before installing or uninstalling tools, streamlining the process.
 
 ## DevOps Tools Included
 
@@ -42,7 +42,7 @@
 
 ## Tool Preview
 
-![](https://imgur.com/kkUnTrk.png)
+![text](https://imgur.com/kkUnTrk.png)
 
 ## Usage
 
@@ -65,6 +65,7 @@ You can install and run the DevOps Tool Installer in two ways: without cloning t
 ### Method 1: Run the Installer Without Cloning the Repository
 
 #### For Windows (PowerShell)
+
 You can run the DevOps Tool Installer on your Windows machine directly with this one-liner:
 
 ```powershell
@@ -72,6 +73,7 @@ Invoke-Expression (New-Object Net.WebClient).DownloadString('https://raw.githubu
 ```
 
 #### For Linux (Bash)
+
 You can run the DevOps Tool Installer on your Linux machine directly with this one-liner:
 
 ```bash
@@ -132,7 +134,7 @@ Developed by [H A R S H H A A](https://github.com/NotHarshhaa).
 
 ![Author Image](https://imgur.com/2j6Aoyl.png)
 
-> [!Note]
+> [!NOTE]
 > Join our [Telegram Community](https://t.me/prodevopsguy) for discussions and updates. Follow [ProDevOpsGuy](https://github.com/NotHarshhaa) for more DevOps content.
 
 ## Hit the Star! ⭐
