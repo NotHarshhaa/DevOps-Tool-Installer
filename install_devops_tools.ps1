@@ -31,232 +31,32 @@ Write-Host "  - Packer 📦"
 Write-Host "  - Vagrant 📦"
 Write-Host ""
 
-# Function to install Docker
-function Install-Docker {
-    choco install docker-desktop -y
-    Write-Host "Docker installed successfully."
+# Generic function to install tools using Chocolatey
+function Install-Tool {
+    param (
+        [string]$tool
+    )
+    try {
+        choco install $tool -y
+        Write-Host "$tool installed successfully." -ForegroundColor Green
+    } catch {
+        $errorMessage = $_.Exception.Message
+        Write-Host "Failed to install ${tool}: ${errorMessage}" -ForegroundColor Red
+    }
 }
 
-# Function to uninstall Docker
-function Uninstall-Docker {
-    choco uninstall docker-desktop -y
-    Write-Host "Docker uninstalled successfully."
-}
-
-# Function to install Kubernetes (kubectl)
-function Install-Kubectl {
-    choco install kubernetes-cli -y
-    Write-Host "Kubernetes (kubectl) installed successfully."
-}
-
-# Function to uninstall Kubernetes (kubectl)
-function Uninstall-Kubectl {
-    choco uninstall kubernetes-cli -y
-    Write-Host "Kubernetes (kubectl) uninstalled successfully."
-}
-
-# Function to install Ansible
-function Install-Ansible {
-    choco install ansible -y
-    Write-Host "Ansible installed successfully."
-}
-
-# Function to uninstall Ansible
-function Uninstall-Ansible {
-    choco uninstall ansible -y
-    Write-Host "Ansible uninstalled successfully."
-}
-
-# Function to install Terraform
-function Install-Terraform {
-    choco install terraform -y
-    Write-Host "Terraform installed successfully."
-}
-
-# Function to uninstall Terraform
-function Uninstall-Terraform {
-    choco uninstall terraform -y
-    Write-Host "Terraform uninstalled successfully."
-}
-
-# Function to install Jenkins
-function Install-Jenkins {
-    choco install jenkins -y
-    Write-Host "Jenkins installed successfully."
-}
-
-# Function to uninstall Jenkins
-function Uninstall-Jenkins {
-    choco uninstall jenkins -y
-    Write-Host "Jenkins uninstalled successfully."
-}
-
-# Function to install AWS CLI
-function Install-AWSCLI {
-    choco install awscli -y
-    Write-Host "AWS CLI installed successfully."
-}
-
-# Function to uninstall AWS CLI
-function Uninstall-AWSCLI {
-    choco uninstall awscli -y
-    Write-Host "AWS CLI uninstalled successfully."
-}
-
-# Function to install Azure CLI
-function Install-AzureCLI {
-    choco install azure-cli -y
-    Write-Host "Azure CLI installed successfully."
-}
-
-# Function to uninstall Azure CLI
-function Uninstall-AzureCLI {
-    choco uninstall azure-cli -y
-    Write-Host "Azure CLI uninstalled successfully."
-}
-
-# Function to install Google Cloud SDK
-function Install-GCloud {
-    choco install google-cloud-sdk -y
-    Write-Host "Google Cloud SDK installed successfully."
-}
-
-# Function to uninstall Google Cloud SDK
-function Uninstall-GCloud {
-    choco uninstall google-cloud-sdk -y
-    Write-Host "Google Cloud SDK uninstalled successfully."
-}
-
-# Function to install Helm
-function Install-Helm {
-    choco install kubernetes-helm -y
-    Write-Host "Helm installed successfully."
-}
-
-# Function to uninstall Helm
-function Uninstall-Helm {
-    choco uninstall kubernetes-helm -y
-    Write-Host "Helm uninstalled successfully."
-}
-
-# Function to install Prometheus
-function Install-Prometheus {
-    choco install prometheus -y
-    Write-Host "Prometheus installed successfully."
-}
-
-# Function to uninstall Prometheus
-function Uninstall-Prometheus {
-    choco uninstall prometheus -y
-    Write-Host "Prometheus uninstalled successfully."
-}
-
-# Function to install Grafana
-function Install-Grafana {
-    choco install grafana -y
-    Write-Host "Grafana installed successfully."
-}
-
-# Function to uninstall Grafana
-function Uninstall-Grafana {
-    choco uninstall grafana -y
-    Write-Host "Grafana uninstalled successfully."
-}
-
-# Function to install GitLab Runner
-function Install-GitLabRunner {
-    choco install gitlab-runner -y
-    Write-Host "GitLab Runner installed successfully."
-}
-
-# Function to uninstall GitLab Runner
-function Uninstall-GitLabRunner {
-    choco uninstall gitlab-runner -y
-    Write-Host "GitLab Runner uninstalled successfully."
-}
-
-# Function to install HashiCorp Vault
-function Install-Vault {
-    choco install vault -y
-    Write-Host "HashiCorp Vault installed successfully."
-}
-
-# Function to uninstall HashiCorp Vault
-function Uninstall-Vault {
-    choco uninstall vault -y
-    Write-Host "HashiCorp Vault uninstalled successfully."
-}
-
-# Function to install HashiCorp Consul
-function Install-Consul {
-    choco install consul -y
-    Write-Host "HashiCorp Consul installed successfully."
-}
-
-# Function to uninstall HashiCorp Consul
-function Uninstall-Consul {
-    choco uninstall consul -y
-    Write-Host "HashiCorp Consul uninstalled successfully."
-}
-
-# Function to install Minikube
-function Install-Minikube {
-    choco install minikube -y
-    Write-Host "Minikube installed successfully."
-}
-
-# Function to uninstall Minikube
-function Uninstall-Minikube {
-    choco uninstall minikube -y
-    Write-Host "Minikube uninstalled successfully."
-}
-
-# Function to install Istio
-function Install-Istio {
-    choco install istio -y
-    Write-Host "Istio installed successfully."
-}
-
-# Function to uninstall Istio
-function Uninstall-Istio {
-    choco uninstall istio -y
-    Write-Host "Istio uninstalled successfully."
-}
-
-# Function to install OpenShift CLI
-function Install-OpenShiftCLI {
-    choco install openshift-cli -y
-    Write-Host "OpenShift CLI installed successfully."
-}
-
-# Function to uninstall OpenShift CLI
-function Uninstall-OpenShiftCLI {
-    choco uninstall openshift-cli -y
-    Write-Host "OpenShift CLI uninstalled successfully."
-}
-
-# Function to install Packer
-function Install-Packer {
-    choco install packer -y
-    Write-Host "Packer installed successfully."
-}
-
-# Function to uninstall Packer
-function Uninstall-Packer {
-    choco uninstall packer -y
-    Write-Host "Packer uninstalled successfully."
-}
-
-# Function to install Vagrant
-function Install-Vagrant {
-    choco install vagrant -y
-    Write-Host "Vagrant installed successfully."
-}
-
-# Function to uninstall Vagrant
-function Uninstall-Vagrant {
-    choco uninstall vagrant -y
-    Write-Host "Vagrant uninstalled successfully."
+# Generic function to uninstall tools using Chocolatey
+function Uninstall-Tool {
+    param (
+        [string]$tool
+    )
+    try {
+        choco uninstall $tool -y
+        Write-Host "$tool uninstalled successfully." -ForegroundColor Green
+    } catch {
+        $errorMessage = $_.Exception.Message
+        Write-Host "Failed to uninstall ${tool}: ${errorMessage}" -ForegroundColor Red
+    }
 }
 
 # Function to display the main menu and handle user input
@@ -269,96 +69,62 @@ function Main-Menu {
 
     if ($action_choice -eq 1 -or $action_choice -eq 2) {
         Write-Host "Select a tool:"
-        Write-Host "1. Docker"
-        Write-Host "2. Kubernetes (kubectl)"
-        Write-Host "3. Ansible"
-        Write-Host "4. Terraform"
-        Write-Host "5. Jenkins"
-        Write-Host "6. AWS CLI"
-        Write-Host "7. Azure CLI"
-        Write-Host "8. Google Cloud SDK"
-        Write-Host "9. Helm"
-        Write-Host "10. Prometheus"
-        Write-Host "11. Grafana"
-        Write-Host "12. GitLab Runner"
-        Write-Host "13. HashiCorp Vault"
-        Write-Host "14. HashiCorp Consul"
-        Write-Host "15. Minikube"
-        Write-Host "16. Istio"
-        Write-Host "17. OpenShift CLI"
-        Write-Host "18. Packer"
-        Write-Host "19. Vagrant"
-        $tool_choice = Read-Host "Enter the number corresponding to the tool"
+        $tools = @(
+            "Docker", "Kubernetes (kubectl)", "Ansible", "Terraform", "Jenkins", 
+            "AWS CLI", "Azure CLI", "Google Cloud SDK", "Helm", "Prometheus", 
+            "Grafana", "GitLab Runner", "HashiCorp Vault", "HashiCorp Consul", 
+            "Minikube", "Istio", "OpenShift CLI", "Packer", "Vagrant"
+        )
 
-        switch ($tool_choice) {
-            1 {
-                if ($action_choice -eq 1) { Install-Docker } else { Uninstall-Docker }
+        for ($i = 0; $i -lt $tools.Count; $i++) {
+            Write-Host "$($i + 1). $($tools[$i])"
+        }
+
+        $tool_choice = [int](Read-Host "Enter the number corresponding to the tool")
+        if ($tool_choice -ge 1 -and $tool_choice -le $tools.Count) {
+            $selected_tool = $tools[$tool_choice - 1]
+
+            # Map tool names to Chocolatey package names
+            $toolMap = @{
+                "Docker" = "docker-desktop"
+                "Kubernetes (kubectl)" = "kubernetes-cli"
+                "Ansible" = "ansible"
+                "Terraform" = "terraform"
+                "Jenkins" = "jenkins"
+                "AWS CLI" = "awscli"
+                "Azure CLI" = "azure-cli"
+                "Google Cloud SDK" = "google-cloud-sdk"
+                "Helm" = "kubernetes-helm"
+                "Prometheus" = "prometheus"
+                "Grafana" = "grafana"
+                "GitLab Runner" = "gitlab-runner"
+                "HashiCorp Vault" = "vault"
+                "HashiCorp Consul" = "consul"
+                "Minikube" = "minikube"
+                "Istio" = "istio"
+                "OpenShift CLI" = "openshift-cli"
+                "Packer" = "packer"
+                "Vagrant" = "vagrant"
             }
-            2 {
-                if ($action_choice -eq 1) { Install-Kubectl } else { Uninstall-Kubectl }
+
+            if ($toolMap.ContainsKey($selected_tool)) {
+                $packageName = $toolMap[$selected_tool]
+                if ($action_choice -eq 1) {
+                    Install-Tool -tool $packageName
+                } else {
+                    Uninstall-Tool -tool $packageName
+                }
+            } else {
+                Write-Host "Invalid tool selection. Exiting." -ForegroundColor Red
             }
-            3 {
-                if ($action_choice -eq 1) { Install-Ansible } else { Uninstall-Ansible }
-            }
-            4 {
-                if ($action_choice -eq 1) { Install-Terraform } else { Uninstall-Terraform }
-            }
-            5 {
-                if ($action_choice -eq 1) { Install-Jenkins } else { Uninstall-Jenkins }
-            }
-            6 {
-                if ($action_choice -eq 1) { Install-AWSCLI } else { Uninstall-AWSCLI }
-            }
-            7 {
-                if ($action_choice -eq 1) { Install-AzureCLI } else { Uninstall-AzureCLI }
-            }
-            8 {
-                if ($action_choice -eq 1) { Install-GCloud } else { Uninstall-GCloud }
-            }
-            9 {
-                if ($action_choice -eq 1) { Install-Helm } else { Uninstall-Helm }
-            }
-            10 {
-                if ($action_choice -eq 1) { Install-Prometheus } else { Uninstall-Prometheus }
-            }
-            11 {
-                if ($action_choice -eq 1) { Install-Grafana } else { Uninstall-Grafana }
-            }
-            12 {
-                if ($action_choice -eq 1) { Install-GitLabRunner } else { Uninstall-GitLabRunner }
-            }
-            13 {
-                if ($action_choice -eq 1) { Install-Vault } else { Uninstall-Vault }
-            }
-            14 {
-                if ($action_choice -eq 1) { Install-Consul } else { Uninstall-Consul }
-            }
-            15 {
-                if ($action_choice -eq 1) { Install-Minikube } else { Uninstall-Minikube }
-            }
-            16 {
-                if ($action_choice -eq 1) { Install-Istio } else { Uninstall-Istio }
-            }
-            17 {
-                if ($action_choice -eq 1) { Install-OpenShiftCLI } else { Uninstall-OpenShiftCLI }
-            }
-            18 {
-                if ($action_choice -eq 1) { Install-Packer } else { Uninstall-Packer }
-            }
-            19 {
-                if ($action_choice -eq 1) { Install-Vagrant } else { Uninstall-Vagrant }
-            }
-            default {
-                Write-Host "Invalid tool choice. Exiting."
-                exit
-            }
+        } else {
+            Write-Host "Invalid input. Please enter a valid number." -ForegroundColor Red
         }
     } elseif ($action_choice -eq 3) {
-        Write-Host "Exiting. Goodbye!"
+        Write-Host "Exiting. Goodbye!" -ForegroundColor Yellow
         exit
     } else {
-        Write-Host "Invalid action choice. Exiting."
-        exit
+        Write-Host "Invalid action choice. Exiting." -ForegroundColor Red
     }
 }
 
