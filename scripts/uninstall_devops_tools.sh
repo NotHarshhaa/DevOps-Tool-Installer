@@ -7,8 +7,28 @@ TIMESTAMP=$(date "+%Y%m%d_%H%M%S")
 LOG_DIR="logs/uninstall_$TIMESTAMP"
 LOG_FILE="$LOG_DIR/uninstall.log"
 DRY_RUN=false
+MAX_LOG_DIRS=5
 
-mkdir -p "$LOG_DIR"
+# Check for root/sudo privileges
+if [ "$EUID" -ne 0 ] && ! sudo -n true 2>/dev/null; then
+    echo "This script requires root privileges. Please run with sudo."
+    exit 1
+fi
+
+# Create log directory with error handling
+if ! mkdir -p "$LOG_DIR"; then
+    echo "Failed to create log directory: $LOG_DIR"
+    exit 1
+fi
+
+# Cleanup old log directories
+cleanup_old_logs() {
+    local log_count=$(ls -d logs/uninstall_* 2>/dev/null | wc -l)
+    if [ "$log_count" -gt "$MAX_LOG_DIRS" ]; then
+        ls -dt logs/uninstall_* | tail -n +$((MAX_LOG_DIRS + 1)) | xargs rm -rf
+    fi
+}
+cleanup_old_logs
 
 # Emojis and colors
 GREEN="\033[1;32m"
@@ -69,23 +89,23 @@ run_cmd() {
 
 # Uninstall commands per tool
 declare -A UNINSTALL_CMDS=(
-    [docker]="sudo systemctl stop docker; sudo $PKG_MANAGER remove -y docker*; sudo rm -rf /var/lib/docker /etc/docker"
-    [kubectl]="sudo rm -f /usr/local/bin/kubectl"
-    [ansible]="sudo $PKG_MANAGER remove -y ansible"
-    [terraform]="sudo $PKG_MANAGER remove -y terraform; sudo rm -f /usr/local/bin/terraform"
-    [helm]="sudo rm -f /usr/local/bin/helm"
-    [awscli]="sudo rm -rf /usr/local/aws /usr/local/bin/aws"
-    [azurecli]="sudo $PKG_MANAGER remove -y azure-cli"
-    [gcloud]="sudo rm -rf /usr/local/google-cloud-sdk"
-    [grafana]="sudo systemctl stop grafana-server; sudo $PKG_MANAGER remove -y grafana; sudo rm -rf /etc/grafana /var/lib/grafana"
-    [gitlab-runner]="sudo gitlab-runner uninstall; sudo rm -f /usr/local/bin/gitlab-runner"
-    [istio]="sudo rm -f /usr/local/bin/istioctl"
-    [openshift]="sudo rm -f /usr/local/bin/oc /usr/local/bin/kubectl"
-    [minikube]="sudo rm -f /usr/local/bin/minikube"
-    [packer]="sudo rm -f /usr/local/bin/packer"
-    [jenkins]="sudo systemctl stop jenkins; sudo $PKG_MANAGER remove -y jenkins; sudo rm -rf /var/lib/jenkins /etc/jenkins"
-    [vault]="sudo rm -f /usr/local/bin/vault"
-    [consul]="sudo rm -f /usr/local/bin/consul"
+    [docker]="if systemctl is-active docker &>/dev/null; then sudo systemctl stop docker; fi; sudo $PKG_MANAGER remove -y docker* || true; sudo rm -rf /var/lib/docker /etc/docker"
+    [kubectl]="if [ -f /usr/local/bin/kubectl ]; then sudo rm -f /usr/local/bin/kubectl; fi"
+    [ansible]="sudo $PKG_MANAGER remove -y ansible || true"
+    [terraform]="sudo $PKG_MANAGER remove -y terraform || true; if [ -f /usr/local/bin/terraform ]; then sudo rm -f /usr/local/bin/terraform; fi"
+    [helm]="if [ -f /usr/local/bin/helm ]; then sudo rm -f /usr/local/bin/helm; fi"
+    [awscli]="if [ -d /usr/local/aws ]; then sudo rm -rf /usr/local/aws /usr/local/bin/aws; fi"
+    [azurecli]="sudo $PKG_MANAGER remove -y azure-cli || true"
+    [gcloud]="if [ -d /usr/local/google-cloud-sdk ]; then sudo rm -rf /usr/local/google-cloud-sdk; fi"
+    [grafana]="if systemctl is-active grafana-server &>/dev/null; then sudo systemctl stop grafana-server; fi; sudo $PKG_MANAGER remove -y grafana || true; sudo rm -rf /etc/grafana /var/lib/grafana"
+    [gitlab-runner]="if command -v gitlab-runner &>/dev/null; then sudo gitlab-runner uninstall; fi; sudo rm -f /usr/local/bin/gitlab-runner"
+    [istio]="if [ -f /usr/local/bin/istioctl ]; then sudo rm -f /usr/local/bin/istioctl; fi"
+    [openshift]="if [ -f /usr/local/bin/oc ]; then sudo rm -f /usr/local/bin/oc /usr/local/bin/kubectl; fi"
+    [minikube]="if [ -f /usr/local/bin/minikube ]; then sudo rm -f /usr/local/bin/minikube; fi"
+    [packer]="if [ -f /usr/local/bin/packer ]; then sudo rm -f /usr/local/bin/packer; fi"
+    [jenkins]="if systemctl is-active jenkins &>/dev/null; then sudo systemctl stop jenkins; fi; sudo $PKG_MANAGER remove -y jenkins || true; sudo rm -rf /var/lib/jenkins /etc/jenkins"
+    [vault]="if [ -f /usr/local/bin/vault ]; then sudo rm -f /usr/local/bin/vault; fi"
+    [consul]="if [ -f /usr/local/bin/consul ]; then sudo rm -f /usr/local/bin/consul; fi"
 )
 
 # Group tools by category
