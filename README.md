@@ -21,6 +21,34 @@ Easily **install and uninstall essential DevOps tools** on **Linux & Windows** w
 
 ---
 
+## 🌟 Advanced Features
+
+### 🔒 Security & Validation
+- **Administrator Privilege Check** – Ensures proper permissions before execution
+- **Package Verification** – Validates installations and configurations
+- **Secure Update Mechanism** – Checks authenticity of updates
+- **State Management** – Tracks tool installations and configurations
+
+### 📊 Enhanced Logging & Monitoring
+- **Comprehensive Logging System** – Detailed operation tracking with timestamps
+- **Installation Status Tracking** – Real-time status monitoring
+- **Error Handling** – Robust error capture and reporting
+- **Operation History** – Maintains detailed history of all actions
+
+### ⚡ Performance & Reliability
+- **Parallel Installation Support** – Faster multi-tool installations
+- **Timeout Management** – Prevents hanging operations
+- **Auto-Recovery** – Handles failed installations gracefully
+- **Resource Management** – Optimizes system resource usage
+
+### 🔄 Update & Maintenance
+- **Automatic Update Checks** – Notifies of new versions
+- **Version Management** – Tracks and manages tool versions
+- **Clean Uninstallation** – Complete removal of tools and configs
+- **Backup & Restore** – Saves configurations before major changes
+
+---
+
 ## 📌 Supported DevOps Tools  
 
 ### 🔹 Containerization & Orchestration  
@@ -119,14 +147,25 @@ iwr -useb https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/ma
 
 ---
 
-## 📋 What’s New  
+## 📋 What's New  
 
-- ✅ **`devops.sh` / `devops.ps1` launchers** – A single entrypoint for install/uninstall  
-- ✅ **Uninstaller script (`uninstall_devops_tools.sh`)** with advanced logic  
-- ✅ **Dry run mode** with `--dry-run` flag  
-- ✅ **Interactive CLI/GUI checklist for tools**  
-- ✅ **Logs saved to `logs/uninstall_YYYYMMDD_HHMMSS/`**  
-- ✅ **Grouped tool categories for easier selection**  
+### 🆕 Latest Updates (v2.5.0)
+- ✨ **Enhanced Logging System** – Comprehensive logging with mutex-based file access
+- ✨ **Administrator Checks** – Strict privilege validation for secure execution
+- ✨ **State Management** – Track installation status and configuration state
+- ✨ **Parallel Installations** – Support for concurrent tool installations
+- ✨ **Update Notifications** – Automatic checks for new versions
+- ✨ **Improved Error Handling** – Better error capture and recovery
+- ✨ **Installation Validation** – Verify successful tool installations
+- ✨ **Resource Optimization** – Better system resource management
+- ✨ **Timeout Controls** – Prevent hanging operations
+- ✨ **Clean Uninstallation** – Improved cleanup procedures
+
+### 🔄 Previous Updates
+- ✅ **Universal Launchers** (`devops.sh` / `devops.ps1`) – Single entrypoint for operations
+- ✅ **Advanced Uninstaller** with dry run support
+- ✅ **Interactive Tool Selection** with categorized listings
+- ✅ **Automated Logging** with timestamp organization
 
 ---
 
