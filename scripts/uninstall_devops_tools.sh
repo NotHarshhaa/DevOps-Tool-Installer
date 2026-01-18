@@ -288,16 +288,17 @@ show_banner() {
 
 # CLI tool selection prompt - with direct terminal output
 cli_tool_prompt() {
-    printf "\n${YELLOW}🔧 Available Tools:${RESET}\n\n" > /dev/tty
+    printf "\n${YELLOW}🔧 Scanning your system for installed DevOps tools...${RESET}\n" > /dev/tty
+    printf "${YELLOW}This may take a few seconds...${RESET}\n\n" > /dev/tty
     local index=1
     local all_tools=()
 
     for category in "${!TOOL_CATEGORIES[@]}"; do
         printf "\n${CYAN}[$category]${RESET}\n" > /dev/tty
         for tool in ${TOOL_CATEGORIES[$category]}; do
-            # Check if tool is in state file as installed
+            # Check if tool is actually installed by running verification command
             local installed="No"
-            if jq -e --arg tool "$tool" '.[] | select(.name == $tool and .status == "installed")' "${CONFIG[STATE_FILE]}" &>/dev/null; then
+            if bash -c "${VERIFY_CMDS[$tool]}" >/dev/null 2>&1; then
                 installed="${GREEN}Yes${RESET}"
             fi
             printf "${GREEN}[%2d] %-30s${RESET} Installed: %s\n" "$index" "$tool" "$installed" > /dev/tty
@@ -319,7 +320,7 @@ cli_tool_prompt() {
         echo "$all_tools_str"
         return 0
     elif [[ "$selection" = "installed" ]]; then
-        # Return only installed tools
+        # Return only installed tools using real-time detection
         local installed_tools=""
         local all_tools_str=""
 
@@ -328,13 +329,13 @@ cli_tool_prompt() {
         done
 
         for tool in $all_tools_str; do
-            if jq -e --arg tool "$tool" '.[] | select(.name == $tool and .status == "installed")' "${CONFIG[STATE_FILE]}" &>/dev/null; then
+            if bash -c "${VERIFY_CMDS[$tool]}" >/dev/null 2>&1; then
                 installed_tools+="$tool "
             fi
         done
 
         if [[ -z "$installed_tools" ]]; then
-            printf "${YELLOW}No installed tools found in the state file.${RESET}\n" > /dev/tty
+            printf "${YELLOW}No installed tools found on your system.${RESET}\n" > /dev/tty
             # Default to docker if nothing is installed
             echo "docker"
             return 0

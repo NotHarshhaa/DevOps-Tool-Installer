@@ -2,9 +2,25 @@
 # Enhanced version with better error handling, logging, and state management
 
 # Check for Administrator privileges
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
+$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
 if (-not $isAdmin) {
-    Write-Host 'This script requires Administrator privileges. Please run PowerShell as Administrator.' -ForegroundColor Red
+    Write-Host 'ERROR: This script requires Administrator privileges.' -ForegroundColor Red
+    Write-Host 'Please right-click PowerShell and select "Run as Administrator"' -ForegroundColor Yellow
+    Write-Host 'Current user: ' -ForegroundColor White -NoNewline
+    Write-Host $currentUser.Name -ForegroundColor Gray
+    exit 1
+}
+
+# Additional check for elevated privileges
+try {
+    $testPath = "$env:TEMP\admin_test_$(Get-Random)"
+    New-Item -Path $testPath -ItemType Directory -Force | Out-Null
+    Remove-Item -Path $testPath -Force -Recurse | Out-Null
+} catch {
+    Write-Host 'ERROR: Cannot create/remove directories. Administrator privileges required.' -ForegroundColor Red
     exit 1
 }
 
@@ -103,7 +119,8 @@ function Show-Header {
 
 # Function: Display Tool List
 function Show-Tools {
-    Write-Host "`nTools available for uninstallation:`n" -ForegroundColor Yellow
+    Write-Host "`nScanning your system for installed DevOps tools..." -ForegroundColor Yellow
+    Write-Host "This may take a few seconds..." -ForegroundColor Gray
 
     $tools = @(
         'Docker', 'Kubernetes (kubectl)', 'Ansible', 'Terraform', 'Jenkins',
@@ -114,6 +131,8 @@ function Show-Tools {
 
     # Check installation status for each tool
     $installedTools = Get-InstalledTools
+    
+    Write-Host "`nTools available for uninstallation:`n" -ForegroundColor Yellow
     
     for ($i = 0; $i -lt $tools.Count; $i++) {
         $status = if ($installedTools.Contains($tools[$i])) { '[Installed]' } else { '[Not Found]' }
@@ -131,8 +150,14 @@ function Get-InstalledTools {
     
     foreach ($tool in $packageMap.Keys) {
         $package = $packageMap[$tool]
-        if (choco list --local-only --exact $package) {
-            [void]$installedTools.Add($tool)
+        try {
+            $listOutput = choco list --exact $package 2>$null
+            if ($listOutput -match "1 packages installed") {
+                [void]$installedTools.Add($tool)
+                Write-Log ("Found {0} installed as {1}" -f $tool, $package) -Level Info
+            }
+        } catch {
+            Write-Log ("Error checking {0}: {1}" -f $tool, $_.Exception.Message) -Level Warning
         }
     }
     
@@ -182,7 +207,17 @@ function Update-StateFile {
     try {
         $state = @{}
         if (Test-Path $CONFIG.StateFile) {
-            $state = Get-Content $CONFIG.StateFile | ConvertFrom-Json -AsHashtable
+            try {
+                $state = Get-Content $CONFIG.StateFile | ConvertFrom-Json
+                # Convert to hashtable if it's a PSCustomObject
+                if ($state -is [PSCustomObject]) {
+                    $hashtable = @{}
+                    $state.PSObject.Properties | ForEach-Object { $hashtable[$_.Name] = $_.Value }
+                    $state = $hashtable
+                }
+            } catch {
+                $state = @{}
+            }
         }
         
         $state[$toolName] = @{
@@ -206,19 +241,51 @@ function Uninstall-Tool {
         Write-Log ('Uninstalling {0} ({1})...' -f $toolName, $packageName) -Level Info
         
         # Check if package is actually installed
-        if (-not (choco list --local-only --exact $packageName)) {
-            Write-Log ('{0} is not installed.' -f $toolName) -Level Warning
-            Update-StateFile -toolName $toolName -status 'not_installed'
+        try {
+            $listOutput = choco list --exact $packageName 2>$null
+            if ($listOutput -notmatch "1 packages installed") {
+                Write-Log ('{0} is not installed.' -f $toolName) -Level Warning
+                Update-StateFile -toolName $toolName -status 'not_installed'
+                return
+            }
+        } catch {
+            Write-Log ('Error checking {0}: {1}' -f $toolName, $_.Exception.Message) -Level Error
             return
         }
         
         # Attempt uninstallation
-        choco uninstall $packageName -y
-        if ($LASTEXITCODE -eq 0) {
+        Write-Log ('Attempting to uninstall {0}...' -f $toolName) -Level Info
+        
+        # Check if we can write to chocolatey directories
+        $chocoPath = $env:ChocolateyInstall
+        if (-not $chocoPath) {
+            $chocoPath = "C:\ProgramData\chocolatey"
+        }
+        
+        $testPath = Join-Path $chocoPath "test_write_$(Get-Random)"
+        try {
+            New-Item -Path $testPath -ItemType File -Force | Out-Null
+            Remove-Item -Path $testPath -Force | Out-Null
+        } catch {
+            Write-Log ('Permission denied: Cannot write to Chocolatey directory {0}' -f $chocoPath) -Level Error
+            Write-Host ('ERROR: Permission denied when accessing {0}' -f $chocoPath) -ForegroundColor Red
+            Write-Host 'Please ensure you are running PowerShell as Administrator' -ForegroundColor Yellow
+            Update-StateFile -toolName $toolName -status 'failed' -message 'Permission denied'
+            return
+        }
+        
+        # Run uninstall with better error handling
+        $uninstallResult = choco uninstall $packageName -y --skip-autouninstaller 2>&1
+        $exitCode = $LASTEXITCODE
+        
+        if ($exitCode -eq 0) {
             Write-Log ('{0} uninstalled successfully.' -f $toolName) -Level Success
             Update-StateFile -toolName $toolName -status 'uninstalled'
         } else {
-            throw 'Chocolatey uninstall failed.'
+            Write-Log ('Chocolatey uninstall failed with exit code {0}: {1}' -f $exitCode, ($uninstallResult -join '; ')) -Level Error
+            Write-Host ('ERROR: Failed to uninstall {0}' -f $toolName) -ForegroundColor Red
+            Write-Host 'This may be due to permission issues or files in use.' -ForegroundColor Yellow
+            Update-StateFile -toolName $toolName -status 'failed' -message "Exit code: $exitCode"
         }
     }
     catch {
