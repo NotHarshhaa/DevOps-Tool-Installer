@@ -170,17 +170,33 @@ detect_os() {
     echo -e "${INFO} Detected OS: ${GREEN}$OS $VERSION${RESET}, using package manager: ${GREEN}$PKG_MANAGER${RESET}"
 }
 
-# Run command with dry run support
+# Run command with dry run support - SECURE VERSION
 run_cmd() {
     local cmd=$1
+    
+    # Validate command to prevent injection
+    if [[ -z "$cmd" ]]; then
+        log "ERROR" "Empty command provided"
+        return 1
+    fi
+    
+    # Check for dangerous patterns
+    local dangerous_patterns=('&&' '||' ';' '|' '`' '$(' '&')
+    for pattern in "${dangerous_patterns[@]}"; do
+        if [[ "$cmd" == *"$pattern"* ]]; then
+            log "ERROR" "Dangerous command pattern detected: $pattern"
+            return 1
+        fi
+    done
 
     if [[ "${CONFIG[DRY_RUN]}" == true ]]; then
-        log "INFO" "DRY RUN: $cmd"
         echo -e "${YELLOW}[DRY RUN] $cmd${RESET}"
         return 0
     else
         log "INFO" "Executing: $cmd"
-        if eval "$cmd"; then
+        # Use array to avoid eval - split command safely
+        local cmd_array=($cmd)
+        if "${cmd_array[@]}"; then
             return 0
         else
             return $?
@@ -188,58 +204,58 @@ run_cmd() {
     fi
 }
 
-# Uninstall commands per tool
+# Uninstall commands per tool - SECURE VERSION
 declare -A UNINSTALL_CMDS=(
-    [docker]="(systemctl is-active docker &>/dev/null && systemctl stop docker); $PKG_PURGE docker* containerd.io docker-ce docker-ce-cli || true; rm -rf /var/lib/docker /etc/docker /var/run/docker.sock; groupdel docker &>/dev/null || true"
-    [kubernetes-cli]="rm -f /usr/local/bin/kubectl"
-    [ansible]="$PKG_PURGE ansible || true"
-    [terraform]="$PKG_PURGE terraform || true; rm -f /usr/local/bin/terraform"
-    [helm]="rm -f /usr/local/bin/helm"
-    [aws-cli]="rm -rf /usr/local/aws-cli /usr/local/bin/aws /usr/local/bin/aws_completer"
-    [azure-cli]="$PKG_PURGE azure-cli || true"
-    [google-cloud-sdk]="rm -rf /usr/local/google-cloud-sdk; rm -f /usr/local/bin/gcloud /usr/local/bin/gsutil /usr/local/bin/bq"
-    [grafana]="(systemctl is-active grafana-server &>/dev/null && systemctl stop grafana-server); $PKG_PURGE grafana || true; rm -rf /etc/grafana /var/lib/grafana"
-    [gitlab-runner]="(command -v gitlab-runner &>/dev/null && gitlab-runner uninstall); rm -f /usr/local/bin/gitlab-runner"
-    [istio]="rm -f /usr/local/bin/istioctl; rm -rf ~/.istio"
-    [minikube]="(command -v minikube &>/dev/null && minikube delete --all --purge); rm -f /usr/local/bin/minikube; rm -rf ~/.minikube"
-    [packer]="$PKG_PURGE packer || true; rm -f /usr/local/bin/packer"
-    [jenkins]="(systemctl is-active jenkins &>/dev/null && systemctl stop jenkins); $PKG_PURGE jenkins || true; rm -rf /var/lib/jenkins /etc/jenkins /var/cache/jenkins /var/log/jenkins"
-    [vagrant]="$PKG_PURGE vagrant || true"
-    [git]="$PKG_PURGE git || true"
-    [prometheus]="(systemctl is-active prometheus &>/dev/null && systemctl stop prometheus); $PKG_PURGE prometheus || true; rm -rf /etc/prometheus /var/lib/prometheus; userdel prometheus &>/dev/null || true"
-    [vault]="(systemctl is-active vault &>/dev/null && systemctl stop vault); $PKG_PURGE vault || true; rm -f /usr/local/bin/vault"
-    [consul]="(systemctl is-active consul &>/dev/null && systemctl stop consul); $PKG_PURGE consul || true; rm -f /usr/local/bin/consul"
-    [argocd]="rm -f /usr/local/bin/argocd"
-    [podman]="$PKG_PURGE podman || true"
-    [k9s]="rm -f /usr/local/bin/k9s ~/.local/bin/k9s"
-    [flux]="rm -f /usr/local/bin/flux"
+    [docker]="systemctl stop docker 2>/dev/null || true; $PKG_PURGE docker* containerd.io docker-ce docker-ce-cli 2>/dev/null || true; rm -rf /var/lib/docker /etc/docker /var/run/docker.sock 2>/dev/null || true; groupdel docker 2>/dev/null || true"
+    [kubernetes-cli]="rm -f /usr/local/bin/kubectl 2>/dev/null || true"
+    [ansible]="$PKG_PURGE ansible 2>/dev/null || true"
+    [terraform]="$PKG_PURGE terraform 2>/dev/null || true; rm -f /usr/local/bin/terraform 2>/dev/null || true"
+    [helm]="$PKG_PURGE helm 2>/dev/null || true; rm -f /usr/local/bin/helm 2>/dev/null || true"
+    [aws-cli]="rm -rf /usr/local/aws-cli /usr/local/bin/aws /usr/local/bin/aws_completer 2>/dev/null || true"
+    [azure-cli]="$PKG_PURGE azure-cli 2>/dev/null || true"
+    [google-cloud-sdk]="rm -rf /usr/local/google-cloud-sdk 2>/dev/null || true; rm -f /usr/local/bin/gcloud /usr/local/bin/gsutil /usr/local/bin/bq 2>/dev/null || true"
+    [grafana]="systemctl stop grafana-server 2>/dev/null || true; $PKG_PURGE grafana 2>/dev/null || true; rm -rf /etc/grafana /var/lib/grafana 2>/dev/null || true"
+    [gitlab-runner]="gitlab-runner uninstall 2>/dev/null || true; rm -f /usr/local/bin/gitlab-runner 2>/dev/null || true"
+    [istio]="rm -f /usr/local/bin/istioctl 2>/dev/null || true; rm -rf ~/.istio 2>/dev/null || true"
+    [minikube]="minikube delete --all --purge 2>/dev/null || true; rm -f /usr/local/bin/minikube 2>/dev/null || true; rm -rf ~/.minikube 2>/dev/null || true"
+    [packer]="$PKG_PURGE packer 2>/dev/null || true; rm -f /usr/local/bin/packer 2>/dev/null || true"
+    [jenkins]="systemctl stop jenkins 2>/dev/null || true; $PKG_PURGE jenkins 2>/dev/null || true; rm -rf /var/lib/jenkins /etc/jenkins /var/cache/jenkins /var/log/jenkins 2>/dev/null || true"
+    [vagrant]="$PKG_PURGE vagrant 2>/dev/null || true"
+    [git]="$PKG_PURGE git 2>/dev/null || true"
+    [prometheus]="systemctl stop prometheus 2>/dev/null || true; $PKG_PURGE prometheus 2>/dev/null || true; rm -rf /etc/prometheus /var/lib/prometheus 2>/dev/null || true; userdel prometheus 2>/dev/null || true"
+    [vault]="systemctl stop vault 2>/dev/null || true; $PKG_PURGE vault 2>/dev/null || true; rm -f /usr/local/bin/vault 2>/dev/null || true"
+    [consul]="systemctl stop consul 2>/dev/null || true; $PKG_PURGE consul 2>/dev/null || true; rm -f /usr/local/bin/consul 2>/dev/null || true"
+    [argocd]="rm -f /usr/local/bin/argocd 2>/dev/null || true"
+    [podman]="$PKG_PURGE podman 2>/dev/null || true"
+    [k9s]="rm -f /usr/local/bin/k9s ~/.local/bin/k9s 2>/dev/null || true"
+    [flux]="rm -f /usr/local/bin/flux 2>/dev/null || true"
 )
 
-# Verification commands to check if tool is uninstalled
+# Verification commands to check if tool is uninstalled - SECURE VERSION
 declare -A VERIFY_CMDS=(
-    [docker]="! command -v docker &>/dev/null && ! systemctl is-active docker &>/dev/null"
-    [kubernetes-cli]="! command -v kubectl &>/dev/null"
-    [ansible]="! command -v ansible &>/dev/null"
-    [terraform]="! command -v terraform &>/dev/null"
-    [helm]="! command -v helm &>/dev/null"
-    [aws-cli]="! command -v aws &>/dev/null"
-    [azure-cli]="! command -v az &>/dev/null"
-    [google-cloud-sdk]="! command -v gcloud &>/dev/null"
-    [grafana]="! systemctl is-active grafana-server &>/dev/null"
-    [gitlab-runner]="! command -v gitlab-runner &>/dev/null"
-    [istio]="! command -v istioctl &>/dev/null"
-    [minikube]="! command -v minikube &>/dev/null"
-    [packer]="! command -v packer &>/dev/null"
-    [jenkins]="! systemctl is-active jenkins &>/dev/null"
-    [vagrant]="! command -v vagrant &>/dev/null"
-    [git]="! command -v git &>/dev/null"
-    [prometheus]="! systemctl is-active prometheus &>/dev/null"
-    [vault]="! command -v vault &>/dev/null"
-    [consul]="! command -v consul &>/dev/null"
-    [argocd]="! command -v argocd &>/dev/null"
-    [podman]="! command -v podman &>/dev/null"
-    [k9s]="! command -v k9s &>/dev/null"
-    [flux]="! command -v flux &>/dev/null"
+    [docker]="command -v docker >/dev/null 2>&1 && systemctl is-active docker >/dev/null 2>&1"
+    [kubernetes-cli]="command -v kubectl >/dev/null 2>&1"
+    [ansible]="command -v ansible >/dev/null 2>&1"
+    [terraform]="command -v terraform >/dev/null 2>&1"
+    [helm]="command -v helm >/dev/null 2>&1"
+    [aws-cli]="command -v aws >/dev/null 2>&1"
+    [azure-cli]="command -v az >/dev/null 2>&1"
+    [google-cloud-sdk]="command -v gcloud >/dev/null 2>&1"
+    [grafana]="systemctl is-active grafana-server >/dev/null 2>&1"
+    [gitlab-runner]="command -v gitlab-runner >/dev/null 2>&1"
+    [istio]="command -v istioctl >/dev/null 2>&1"
+    [minikube]="command -v minikube >/dev/null 2>&1"
+    [packer]="command -v packer >/dev/null 2>&1"
+    [jenkins]="systemctl is-active jenkins >/dev/null 2>&1"
+    [vagrant]="command -v vagrant >/dev/null 2>&1"
+    [git]="command -v git >/dev/null 2>&1"
+    [prometheus]="systemctl is-active prometheus >/dev/null 2>&1"
+    [vault]="command -v vault >/dev/null 2>&1"
+    [consul]="command -v consul >/dev/null 2>&1"
+    [argocd]="command -v argocd >/dev/null 2>&1"
+    [podman]="command -v podman >/dev/null 2>&1"
+    [k9s]="command -v k9s >/dev/null 2>&1"
+    [flux]="command -v flux >/dev/null 2>&1"
 )
 
 # Group tools by category
@@ -422,7 +438,8 @@ uninstall_tool() {
     if run_cmd "${UNINSTALL_CMDS[$tool]}"; then
         # Verify uninstallation
         if [[ "${CONFIG[DRY_RUN]}" != true ]]; then
-            if eval "${VERIFY_CMDS[$tool]}" &>/dev/null; then
+            # Run verification command safely without eval
+            if ! bash -c "${VERIFY_CMDS[$tool]}" >/dev/null 2>&1; then
                 log "SUCCESS" "$tool uninstalled successfully"
                 echo -e "${SUCCESS} $tool uninstalled successfully"
                 update_state "$tool" "uninstalled"

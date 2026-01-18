@@ -108,15 +108,17 @@ install_required_tools() {
 
     # Detect package manager
     if command -v apt-get &> /dev/null; then
-        pkg_manager="apt-get -y install"
+        pkg_manager="apt-get"
     elif command -v yum &> /dev/null; then
-        pkg_manager="yum -y install"
+        pkg_manager="yum"
     elif command -v dnf &> /dev/null; then
-        pkg_manager="dnf -y install"
+        pkg_manager="dnf"
     elif command -v pacman &> /dev/null; then
-        pkg_manager="pacman -Sy --noconfirm"
+        pkg_manager="pacman"
     elif command -v zypper &> /dev/null; then
-        pkg_manager="zypper -n install"
+        pkg_manager="zypper"
+    elif command -v apk &> /dev/null; then
+        pkg_manager="apk"
     else
         log "ERROR" "Could not determine package manager"
         echo -e "${RED}Could not determine package manager.${RESET}"
@@ -135,12 +137,57 @@ install_required_tools() {
     for tool in "${tools[@]}"; do
         local package=${pkg_map[$tool]:-$tool}
         echo -e "${BLUE}Installing $tool...${RESET}"
-        if ! eval "sudo $pkg_manager $package"; then
-            log "ERROR" "Failed to install $tool"
-            echo -e "${RED}Failed to install $tool.${RESET}"
-        else
-            log "SUCCESS" "Installed $tool"
-        fi
+        
+        case $pkg_manager in
+            "apt-get")
+                if ! sudo apt-get update && sudo apt-get -y install "$package"; then
+                    log "ERROR" "Failed to install $tool"
+                    echo -e "${RED}Failed to install $tool.${RESET}"
+                else
+                    log "SUCCESS" "Installed $tool"
+                fi
+                ;;
+            "yum")
+                if ! sudo yum -y install "$package"; then
+                    log "ERROR" "Failed to install $tool"
+                    echo -e "${RED}Failed to install $tool.${RESET}"
+                else
+                    log "SUCCESS" "Installed $tool"
+                fi
+                ;;
+            "dnf")
+                if ! sudo dnf -y install "$package"; then
+                    log "ERROR" "Failed to install $tool"
+                    echo -e "${RED}Failed to install $tool.${RESET}"
+                else
+                    log "SUCCESS" "Installed $tool"
+                fi
+                ;;
+            "pacman")
+                if ! sudo pacman -Sy --noconfirm "$package"; then
+                    log "ERROR" "Failed to install $tool"
+                    echo -e "${RED}Failed to install $tool.${RESET}"
+                else
+                    log "SUCCESS" "Installed $tool"
+                fi
+                ;;
+            "zypper")
+                if ! sudo zypper -n install "$package"; then
+                    log "ERROR" "Failed to install $tool"
+                    echo -e "${RED}Failed to install $tool.${RESET}"
+                else
+                    log "SUCCESS" "Installed $tool"
+                fi
+                ;;
+            "apk")
+                if ! sudo apk update && sudo apk add "$package"; then
+                    log "ERROR" "Failed to install $tool"
+                    echo -e "${RED}Failed to install $tool.${RESET}"
+                else
+                    log "SUCCESS" "Installed $tool"
+                fi
+                ;;
+        esac
     done
 }
 

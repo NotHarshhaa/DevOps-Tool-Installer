@@ -42,14 +42,20 @@ function Write-Log {
     
     Write-Host $logMessage -ForegroundColor $color
     
-    # Use a mutex for file access
-    $mutex = New-Object System.Threading.Mutex($false, 'DevOpsToolUninstallerLogMutex')
+    # Use a mutex for file access with proper disposal
+    $mutex = $null
     try {
-        [void]$mutex.WaitOne()
+        $mutex = [System.Threading.Mutex]::OpenExisting('DevOpsToolUninstallerLogMutex')
+    } catch {
+        $mutex = New-Object System.Threading.Mutex($false, 'DevOpsToolUninstallerLogMutex')
+    }
+    
+    try {
+        [void]$mutex.WaitOne(1000) # 1 second timeout
         $logMessage | Out-File -FilePath $CONFIG.LogFile -Append -Encoding utf8
     }
     catch {
-        Write-Host 'Warning: Could not write to log file: $_' -ForegroundColor Yellow
+        Write-Host "Warning: Could not write to log file: $_" -ForegroundColor Yellow
     }
     finally {
         if ($mutex) {

@@ -45,10 +45,16 @@ function Write-Log {
     
     Write-Host "[$timestamp] $Level : $Message" -ForegroundColor $color
     
-    # Use a mutex for file access
-    $mutex = New-Object System.Threading.Mutex($false, "DevOpsToolInstallerLogMutex")
+    # Use a mutex for file access with proper disposal and timeout
+    $mutex = $null
     try {
-        [void]$mutex.WaitOne()
+        $mutex = [System.Threading.Mutex]::OpenExisting("DevOpsToolInstallerLogMutex")
+    } catch {
+        $mutex = New-Object System.Threading.Mutex($false, "DevOpsToolInstallerLogMutex")
+    }
+    
+    try {
+        [void]$mutex.WaitOne(1000) # 1 second timeout
         "[$timestamp] $Level : $Message" | Out-File -FilePath $CONFIG.LogFile -Append -Encoding utf8
     }
     catch {
@@ -114,7 +120,19 @@ function Initialize-PackageManager {
             Set-ExecutionPolicy Bypass -Scope Process -Force
             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
             $installScript = (New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')
-            Invoke-Expression $installScript
+            
+            # Save script to temp file and execute instead of Invoke-Expression
+            $tempFile = [System.IO.Path]::GetTempFileName()
+            $installScript | Out-File -FilePath $tempFile -Encoding utf8
+            
+            try {
+                & $tempFile
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Chocolatey installation failed with exit code $LASTEXITCODE"
+                }
+            } finally {
+                Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+            }
             
             # Reload PATH
             $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -262,9 +280,19 @@ function Test-ToolInstallation {
     
     if ($validationCommands.ContainsKey($PackageName)) {
         try {
-            Invoke-Expression $validationCommands[$PackageName] | Out-Null
-            Write-Log "✅ $ToolName validated successfully" -Level Success
-            return $true
+            # Use Start-Process instead of Invoke-Expression for better security
+            $parts = $validationCommands[$PackageName] -split ' '
+            $exe = $parts[0]
+            $args = $parts[1..($parts.Length - 1)]
+            
+            $result = Start-Process -FilePath $exe -ArgumentList $args -NoNewWindow -Wait -PassThru -ErrorAction Stop
+            if ($result.ExitCode -eq 0) {
+                Write-Log "✅ $ToolName validated successfully" -Level Success
+                return $true
+            } else {
+                Write-Log "❌ $ToolName validation failed with exit code $($result.ExitCode)" -Level Error
+                return $false
+            }
         } catch {
             Write-Log "❌ $ToolName validation failed: $_" -Level Error
             return $false
@@ -306,7 +334,19 @@ function Install-Tool {
                         Set-ExecutionPolicy Bypass -Scope Process -Force
                         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
                         $installScript = (New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')
-                        Invoke-Expression $installScript
+                        
+                        # Save script to temp file and execute instead of Invoke-Expression
+                        $tempFile = [System.IO.Path]::GetTempFileName()
+                        $installScript | Out-File -FilePath $tempFile -Encoding utf8
+                        
+                        try {
+                            & $tempFile
+                            if ($LASTEXITCODE -ne 0) {
+                                throw "Chocolatey installation failed with exit code $LASTEXITCODE"
+                            }
+                        } finally {
+                            Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+                        }
                         
                         # Reload PATH
                         $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')

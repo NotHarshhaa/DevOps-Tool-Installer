@@ -9,12 +9,14 @@ if (-not $isAdmin) {
 
 # Script Configuration
 $CONFIG = @{
-    Version = "2.5.0"
+    Version = "3.0.0"
     LogFile = "devops_manager.log"
     StateFile = "devops_state.json"
     InstallScript = "scripts/install_devops_tools.ps1"
     UninstallScript = "scripts/uninstall_devops_tools.ps1"
-    UpdateCheckUrl = "https://api.github.com/repos/ProDevOpsGuy/DevOps-Tool-Installer/releases/latest"
+    UpdateCheckUrl = "https://api.github.com/repos/NotHarshhaa/DevOps-Tool-Installer/releases/latest"
+    BackupDir = "backups"
+    ConfigDir = "config"
 }
 
 # Function: Initialize logging
@@ -43,10 +45,16 @@ function Write-Log {
     $logMessage = "[$timestamp] $Level : $Message"
     Write-Host $logMessage -ForegroundColor $color
     
-    # Use a mutex for file access
-    $mutex = New-Object System.Threading.Mutex($false, "DevOpsToolInstallerLogMutex")
+    # Use a mutex for file access with proper disposal
+    $mutex = $null
     try {
-        [void]$mutex.WaitOne()
+        $mutex = [System.Threading.Mutex]::OpenExisting("DevOpsToolInstallerLogMutex")
+    } catch {
+        $mutex = New-Object System.Threading.Mutex($false, "DevOpsToolInstallerLogMutex")
+    }
+    
+    try {
+        [void]$mutex.WaitOne(1000) # 1 second timeout
         $logMessage | Out-File -FilePath $CONFIG.LogFile -Append -Encoding utf8
     }
     catch {
@@ -64,13 +72,17 @@ function Write-Log {
 function Test-Updates {
     try {
         Write-Log "Checking for updates..." -Level Info
-        $response = Invoke-RestMethod -Uri $CONFIG.UpdateCheckUrl -Method Get
+        
+        # Add TLS 1.2 support and timeout
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        
+        $response = Invoke-RestMethod -Uri $CONFIG.UpdateCheckUrl -Method Get -TimeoutSec 10
         $latestVersion = $response.tag_name -replace 'v', ''
         
         if ([version]$latestVersion -gt [version]$CONFIG.Version) {
             Write-Log "New version available: v$latestVersion" -Level Warning
             $choice = Read-Host "Would you like to update? (y/n)"
-            if ($choice -eq 'y') {
+            if ($choice -match '^[Yy]$') {
                 Update-Script -Version $latestVersion
             }
         } else {
@@ -87,10 +99,55 @@ function Update-Script {
     
     try {
         Write-Log "Updating to version $Version..." -Level Info
-        # Add update logic here
+        
+        # Create backup directory
+        $backupDir = Join-Path -Path $CONFIG.BackupDir -ChildPath "backup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        if (-not (Test-Path $CONFIG.BackupDir)) {
+            New-Item -Path $CONFIG.BackupDir -ItemType Directory -Force | Out-Null
+        }
+        New-Item -Path $backupDir -ItemType Directory -Force | Out-Null
+        
+        # Backup current files
+        Get-ChildItem -Path $PSScriptRoot -Exclude "*.log", "*.bak", "backups", "state" | 
+            Copy-Item -Destination $backupDir -Recurse -Force
+        
+        Write-Log "Current version backed up to: $backupDir" -Level Info
+        
+        # Download new version
+        $downloadUrl = "https://github.com/NotHarshhaa/DevOps-Tool-Installer/archive/v$Version.zip"
+        $tempFile = Join-Path -Path $env:TEMP -ChildPath "devops_update_$Version.zip"
+        
+        Write-Log "Downloading update..." -Level Info
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $tempFile -TimeoutSec 30
+        
+        # Extract update
+        $extractPath = Join-Path -Path $env:TEMP -ChildPath "devops_extract_$Version"
+        if (Test-Path $extractPath) {
+            Remove-Item -Path $extractPath -Recurse -Force
+        }
+        New-Item -Path $extractPath -ItemType Directory -Force | Out-Null
+        
+        Expand-Archive -Path $tempFile -DestinationPath $extractPath -Force
+        
+        # Copy updated files
+        $sourcePath = Join-Path -Path $extractPath -ChildPath "DevOps-Tool-Installer-$Version"
+        Get-ChildItem -Path $sourcePath | Copy-Item -Destination $PSScriptRoot -Recurse -Force
+        
+        # Cleanup
+        Remove-Item -Path $tempFile -Force
+        Remove-Item -Path $extractPath -Recurse -Force
+        
         Write-Log "Update completed successfully" -Level Success
+        Write-Log "Restarting script to use new version..." -Level Info
+        
+        # Restart script
+        Start-Sleep -Seconds 2
+        & $PSScriptRoot\devops.ps1
+        exit
+        
     } catch {
         Write-Log "Update failed: $_" -Level Error
+        Write-Host "Update failed. Please check the logs for details." -ForegroundColor Red
     }
 }
 
@@ -192,7 +249,10 @@ do {
             Write-Host "`nExiting... Have a productive DevOps day!" -ForegroundColor Yellow
             exit 
         }
-        default { Write-Log "Invalid choice. Please select a number between 1 and 5." -Level Warning }
+        default { 
+            Write-Log "Invalid choice. Please select a number between 1 and 5." -Level Warning
+            Write-Host "Invalid choice. Please select a number between 1 and 5." -ForegroundColor Yellow
+        }
     }
     
     if ($choice -ne "5") {

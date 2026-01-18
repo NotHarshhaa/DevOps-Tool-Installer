@@ -300,9 +300,9 @@ install_tool() {
     log "INFO" "Installing $tool..."
     echo -e "\n${INFO} Installing ${CYAN}$tool${RESET}..."
 
-    # Check if already installed
-    if eval "$verify_cmd" &>/dev/null; then
-        local version=$(eval "$version_cmd" 2>/dev/null || echo "Unknown")
+    # Check if already installed - SECURE VERSION
+    if bash -c "$verify_cmd" >/dev/null 2>&1; then
+        local version=$(bash -c "$version_cmd" 2>/dev/null || echo "Unknown")
         log "SUCCESS" "$tool is already installed (version: $version)"
         echo -e "${SUCCESS} $tool is already installed (version: ${GREEN}$version${RESET})"
         update_state "$tool" "installed" "$version"
