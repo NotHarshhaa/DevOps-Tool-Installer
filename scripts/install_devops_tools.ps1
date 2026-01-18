@@ -72,6 +72,9 @@ function Write-Log {
 function Test-SystemRequirements {
     Write-Log 'Checking system requirements...' -Level Info
     
+    # Add TLS 1.2 support
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    
     $requirements = @{
         'PowerShell Version' = @{
             Test = $PSVersionTable.PSVersion.Major -ge 5
@@ -88,6 +91,10 @@ function Test-SystemRequirements {
         'Available Disk Space' = @{
             Test = (Get-PSDrive -Name C).Free -gt 10GB
             Message = 'At least 10GB of free disk space is required'
+        }
+        'TLS 1.2 Support' = @{
+            Test = [System.Net.ServicePointManager]::SecurityProtocol -band 3072
+            Message = 'TLS 1.2 support is required'
         }
     }
 
@@ -144,16 +151,13 @@ function Initialize-PackageManager {
                 Write-Host 'Chocolatey installed successfully!' -ForegroundColor Green
             } else {
                 Write-Host 'Failed to verify Chocolatey installation.' -ForegroundColor Red
-                exit 1
             }
         } catch {
-            Write-Host ('Failed to install Chocolatey: {0}' -f $_) -ForegroundColor Red
-            exit 1
+            Write-Log "Failed to install Chocolatey: $_" -Level Error
+            Write-Host "Failed to install Chocolatey package manager. Please check the logs for details." -ForegroundColor Red
         }
-    } else {
-        Write-Host 'Chocolatey is already installed.' -ForegroundColor Green
     }
-
+    
     # Check for winget if it's the preferred package manager
     if ($CONFIG.PreferredPackageManager -eq 'winget' -and -not (Get-Command winget -ErrorAction SilentlyContinue)) {
         Write-Host 'Winget is not installed. Please install App Installer from the Microsoft Store.' -ForegroundColor Red

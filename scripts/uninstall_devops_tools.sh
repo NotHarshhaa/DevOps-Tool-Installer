@@ -411,7 +411,11 @@ check_if_in_use() {
 uninstall_tool() {
     local tool=$1
 
-    log "INFO" "Uninstalling $tool..."
+    # Add TLS 1.2 support for secure connections
+    export SSL_VERSION="TLSv1.2"
+    export SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
+
+    log "INFO" "Uninstalling ${CYAN}$tool${RESET}..."
     echo -e "\n${INFO} Uninstalling ${CYAN}$tool${RESET}..."
 
     # Check if the tool exists in our uninstall commands

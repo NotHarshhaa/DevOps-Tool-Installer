@@ -17,6 +17,9 @@ $CONFIG = @{
 
 # Function: Initialize logging
 function Initialize-Logging {
+    # Add TLS 1.2 support
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    
     if (-not (Test-Path $CONFIG.LogFile)) {
         New-Item -Path $CONFIG.LogFile -ItemType File -Force | Out-Null
     }

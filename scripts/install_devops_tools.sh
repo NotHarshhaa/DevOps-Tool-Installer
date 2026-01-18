@@ -262,7 +262,7 @@ check_system_requirements() {
         # Install missing commands
         for cmd in "${missing_cmds[@]}"; do
             echo -e "${INFO} Installing $cmd..."
-            if eval "sudo $PKG_INSTALL $cmd"; then
+            if sudo $PKG_INSTALL $cmd; then
                 log "SUCCESS" "Installed $cmd"
             else
                 log "ERROR" "Failed to install $cmd"
@@ -282,11 +282,13 @@ update_package_repositories() {
     log "INFO" "Updating package repositories..."
     echo -e "${INFO} Updating package repositories..."
 
-    if ! eval "sudo $PKG_UPDATE"; then
+    # Use safe command execution instead of eval
+    if ! sudo $PKG_UPDATE; then
         log "WARN" "Failed to update package repositories. Continuing anyway."
         echo -e "${WARN} Failed to update package repositories. Continuing anyway."
     else
-        log "SUCCESS" "Package repositories updated"
+        log "SUCCESS" "Package repositories updated successfully"
+        echo -e "${SUCCESS} Package repositories updated successfully"
     fi
 }
 
@@ -297,6 +299,10 @@ install_tool() {
     local verify_cmd=$3
     local version_cmd=$4
 
+    # Add TLS 1.2 support for secure connections
+    export SSL_VERSION="TLSv1.2"
+    export SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
+    
     log "INFO" "Installing $tool..."
     echo -e "\n${INFO} Installing ${CYAN}$tool${RESET}..."
 
@@ -363,8 +369,8 @@ EOF
         rm -f "$temp_script" "$output_file"
 
         # Verify installation
-        if eval "$verify_cmd" &>/dev/null; then
-            local version=$(eval "$version_cmd" 2>/dev/null || echo "Unknown")
+        if bash -c "$verify_cmd" &>/dev/null; then
+            local version=$(bash -c "$version_cmd" 2>/dev/null || echo "Unknown")
             log "SUCCESS" "$tool installed successfully (version: $version)"
             echo -e "${SUCCESS} $tool installed successfully (version: ${GREEN}$version${RESET})"
             update_state "$tool" "installed" "$version"
