@@ -25,9 +25,10 @@ try {
 }
 
 # Script Configuration
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $CONFIG = @{
-    LogFile = 'devops_uninstall.log'
-    StateFile = 'devops_state.json'
+    LogFile              = Join-Path $scriptDir 'devops_uninstall.log'
+    StateFile            = Join-Path (Split-Path $scriptDir -Parent) 'devops_state.json'
     ChocolateyMinVersion = '1.0.0'
 }
 
@@ -60,25 +61,30 @@ function Write-Log {
     }
     
     Write-Host $logMessage -ForegroundColor $color
-    
-    # Use a mutex for file access with proper disposal
-    $mutex = $null
+
+    # Use a mutex for thread-safe file access
+    $mutex    = $null
+    $acquired = $false
     try {
-        $mutex = [System.Threading.Mutex]::OpenExisting('DevOpsToolUninstallerLogMutex')
-    } catch {
-        $mutex = New-Object System.Threading.Mutex($false, 'DevOpsToolUninstallerLogMutex')
-    }
-    
-    try {
-        [void]$mutex.WaitOne(1000) # 1 second timeout
-        $logMessage | Out-File -FilePath $CONFIG.LogFile -Append -Encoding utf8
+        try {
+            $mutex = [System.Threading.Mutex]::OpenExisting('DevOpsToolUninstallerLogMutex')
+        } catch {
+            $mutex = New-Object System.Threading.Mutex($false, 'DevOpsToolUninstallerLogMutex')
+        }
+
+        $acquired = $mutex.WaitOne(1000) # 1 second timeout
+        if ($acquired) {
+            $logMessage | Out-File -FilePath $CONFIG.LogFile -Append -Encoding utf8
+        } else {
+            Write-Host 'Warning: Log mutex timeout, skipping write.' -ForegroundColor Yellow
+        }
     }
     catch {
         Write-Host "Warning: Could not write to log file: $_" -ForegroundColor Yellow
     }
     finally {
-        if ($mutex) {
-            $mutex.ReleaseMutex()
+        if ($mutex -ne $null) {
+            if ($acquired) { $mutex.ReleaseMutex() }
             $mutex.Dispose()
         }
     }
@@ -151,8 +157,11 @@ function Get-InstalledTools {
     foreach ($tool in $packageMap.Keys) {
         $package = $packageMap[$tool]
         try {
-            $listOutput = choco list --exact $package 2>$null
-            if ($listOutput -match "1 packages installed") {
+            # Chocolatey 2.x: 'choco list <pkg>' without --exact is sufficient;
+            # match on package name in the output line rather than the summary count.
+            $listOutput = & choco list $package 2>$null
+            $found = $listOutput | Where-Object { $_ -match "^$([regex]::Escape($package))\s" }
+            if ($found) {
                 [void]$installedTools.Add($tool)
                 Write-Log ("Found {0} installed as {1}" -f $tool, $package) -Level Info
             }
@@ -240,10 +249,11 @@ function Uninstall-Tool {
     try {
         Write-Log ('Uninstalling {0} ({1})...' -f $toolName, $packageName) -Level Info
         
-        # Check if package is actually installed
+        # Check if package is actually installed (Chocolatey 2.x compatible)
         try {
-            $listOutput = choco list --exact $packageName 2>$null
-            if ($listOutput -notmatch "1 packages installed") {
+            $listOutput = & choco list $packageName 2>$null
+            $found = $listOutput | Where-Object { $_ -match "^$([regex]::Escape($packageName))\s" }
+            if (-not $found) {
                 Write-Log ('{0} is not installed.' -f $toolName) -Level Warning
                 Update-StateFile -toolName $toolName -status 'not_installed'
                 return
@@ -274,8 +284,8 @@ function Uninstall-Tool {
             return
         }
         
-        # Run uninstall with better error handling
-        $uninstallResult = choco uninstall $packageName -y --skip-autouninstaller 2>&1
+        # Run uninstall (omit --skip-autouninstaller; deprecated in Chocolatey 2.x)
+        $uninstallResult = & choco uninstall $packageName -y 2>&1
         $exitCode = $LASTEXITCODE
         
         if ($exitCode -eq 0) {

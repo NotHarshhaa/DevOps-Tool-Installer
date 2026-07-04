@@ -4,7 +4,7 @@
 
 Easily **install and uninstall essential DevOps tools** on **Linux & Windows** with a single script! Whether you're a **DevOps Engineer, Cloud Enthusiast, or System Administrator**, this toolkit automates setup and cleanup of your environment — saving time and effort.  
 
-**🔒 SECURITY-HARDENED v3.0.0** - Now with enterprise-grade security and command injection protection!
+**🔒 SECURITY-HARDENED v3.5.0** - Now with enterprise-grade security and command injection protection!
 
 ---
 
@@ -29,7 +29,7 @@ Easily **install and uninstall essential DevOps tools** on **Linux & Windows** w
 
 ## 🌟 Advanced Features
 
-### 🔒 Security & Validation (NEW v3.0.0)
+### 🔒 Security & Validation (NEW v3.5.0)
 - **🛡️ Command Injection Protection** – Eliminated all `eval` usage and `Invoke-Expression` vulnerabilities
 - **🔐 Input Validation** – Detects and blocks dangerous command patterns (`&&`, `||`, `;`, `|`, etc.)
 - **🔒 Safe Execution** – Uses `bash -c` and temp file execution instead of unsafe methods
@@ -215,8 +215,17 @@ iwr -useb https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/ma
 ---
 
 ## 📋 What's New  
+ 
+### 🆕 Latest Updates (v3.5.0) - MAJOR STABILITY & UX RELEASE
+- 🚀 **Option 5 System Information fully implemented** in PowerShell with detailed OS, CPU, RAM, disk, package managers, and network checks
+- 🛠️ **PowerShell Installer Progress Tracking & Summary** – Displays interactive progress `[N/Total]` and a final summary table of installation status
+- 🔴 **PowerShell State File Mismatches Resolved** – Aligned state file location at repository root so the installation status dashboard displays correctly
+- 🔴 **PowerShell Mutex Releases Hardened** – Fixed crash risks by validating mutex acquisition before releasing
+- 🔴 **Bash Uninstall Command Execution Restored** – Replaced overly restrictive pattern verification with secure `bash -c` executions to allow uninstall commands to run correctly
+- 🔄 **Updated Tool Versions & repos** – Upgraded Kubernetes CLI to v1.31, Terraform to HashiCorp's official APT repository, Istio to 1.22.3, Prometheus to v2.53.1, and deprecated Google Cloud SDK apt-key methods with modern signed-by keyrings
+- 🔄 **Chocolatey 2.x compatibility updates** – Updated list/uninstall flags in PowerShell scripts to work natively on modern Chocolatey instances
 
-### 🆕 Latest Updates (v3.0.0) - SECURITY HARDENING RELEASE
+### 🔄 Previous Updates (v3.0.0) - SECURITY HARDENING RELEASE
 - 🛡️ **Critical Security Fixes** – Eliminated command injection vulnerabilities in all scripts
 - 🔐 **Input Validation** – Comprehensive protection against malicious command patterns
 - 🚫 **Safe Command Execution** – Replaced `eval` and `Invoke-Expression` with secure alternatives
@@ -263,7 +272,7 @@ iwr -useb https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/ma
 
 ---
 
-## 🔒 Security (NEW v3.0.0)
+## 🔒 Security (NEW v3.5.0)
 
 ### 🛡️ Security Hardening Summary
 

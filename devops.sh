@@ -7,7 +7,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 declare -A CONFIG=(
-    ["VERSION"]="3.0.0"
+    ["VERSION"]="3.5.0"
     ["LOG_FILE"]="$SCRIPT_DIR/logs/devops_manager.log"
     ["STATE_FILE"]="$SCRIPT_DIR/state/devops_state.json"
     ["INSTALL_SCRIPT"]="$SCRIPT_DIR/scripts/install_devops_tools.sh"
@@ -24,6 +24,8 @@ YELLOW="\033[1;33m"
 BLUE="\033[1;34m"
 CYAN="\033[0;36m"
 PURPLE="\033[0;35m"
+GRAY="\033[0;37m"
+WHITE="\033[1;37m"
 RESET="\033[0m"
 SUCCESS="${GREEN}✅${RESET}"
 FAIL="${RED}❌${RESET}"
@@ -52,14 +54,12 @@ init_logging() {
     # Rotate logs if they get too large (>10MB)
     if [[ -f "${CONFIG[LOG_FILE]}" ]] && [[ $(stat -c%s "${CONFIG[LOG_FILE]}") -gt 10485760 ]]; then
         mv "${CONFIG[LOG_FILE]}" "${CONFIG[LOG_FILE]}.$(date +%Y%m%d_%H%M%S).bak"
-        log "INFO" "Log file rotated due to size"
     fi
 
-    # Start logging
-    exec 3>&1 4>&2
-    trap 'exec 2>&4 1>&3' 0 1 2 3
-    exec 1> >(tee -a "${CONFIG[LOG_FILE]}") 2>&1
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - DevOps Tool Manager v${CONFIG[VERSION]} started"
+    # Append all output to log file without interfering with terminal display
+    # (use per-call tee in log() instead of global exec redirect to avoid double-logging)
+    touch "${CONFIG[LOG_FILE]}"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - DevOps Tool Manager v${CONFIG[VERSION]} started" >> "${CONFIG[LOG_FILE]}"
 }
 
 # Function: Write log message
@@ -67,11 +67,12 @@ log() {
     local level=$1
     local msg=$2
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    # Write to terminal (stdout) and append to log file in one step
     case $level in
-        "INFO") echo -e "[$timestamp] ${INFO} $msg" ;;
-        "SUCCESS") echo -e "[$timestamp] ${SUCCESS} $msg" ;;
-        "ERROR") echo -e "[$timestamp] ${FAIL} $msg" ;;
-        "WARN") echo -e "[$timestamp] ${WARN} $msg" ;;
+        "INFO")    echo -e "[$timestamp] ${INFO} $msg"    | tee -a "${CONFIG[LOG_FILE]}" ;;
+        "SUCCESS") echo -e "[$timestamp] ${SUCCESS} $msg" | tee -a "${CONFIG[LOG_FILE]}" ;;
+        "ERROR")   echo -e "[$timestamp] ${FAIL} $msg"   | tee -a "${CONFIG[LOG_FILE]}" ;;
+        "WARN")    echo -e "[$timestamp] ${WARN} $msg"   | tee -a "${CONFIG[LOG_FILE]}" ;;
     esac
 }
 
@@ -222,7 +223,9 @@ check_updates() {
         return 1
     fi
 
-    if [[ "$latest_version" > "${CONFIG[VERSION]}" ]]; then
+    # Semver-aware comparison using sort -V
+    if printf '%s\n%s\n' "${CONFIG[VERSION]}" "$latest_version" | sort -V | tail -n1 | grep -qx "$latest_version" && \
+       [[ "$latest_version" != "${CONFIG[VERSION]}" ]]; then
         log "WARN" "New version available: v$latest_version"
         echo -e "\n${GREEN}New version available: v$latest_version${RESET}"
         echo -e "${YELLOW}Would you like to update? (y/n):${RESET}"
@@ -362,7 +365,7 @@ show_banner() {
     done
     
     echo ""
-    echo -e "${GREEN}🔒 SECURITY-HARDENED v3.0.0 • Enterprise Ready${RESET}"
+    echo -e "${GREEN}🔒 SECURITY-HARDENED v3.5.0 • Enterprise Ready${RESET}"
     echo ""
 }
 
@@ -442,7 +445,7 @@ show_system_info() {
     echo -e "  ${GREEN}🔢 Version:${RESET} ${WHITE}v${CONFIG[VERSION]}${RESET}"
     echo -e "  ${GREEN}📁 Log File:${RESET} ${WHITE}${CONFIG[LOG_FILE]}${RESET}"
     echo -e "  ${GREEN}🗄️  State File:${RESET} ${WHITE}${CONFIG[STATE_FILE]}${RESET}"
-    echo -e "  ${GREEN}🔒 Security:${RESET} ${WHITE}Hardened v3.0.0${RESET}"
+    echo -e "  ${GREEN}🔒 Security:${RESET} ${WHITE}Hardened v3.5.0${RESET}"
     echo ""
 
     echo -e "${YELLOW}════════════════════════════════════════════════════════════════════════════${RESET}"

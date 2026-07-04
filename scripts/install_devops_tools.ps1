@@ -1,18 +1,19 @@
-# install_devops_tools.ps1
+# install_devops_tools.ps1 - DevOps Tool Installer by ProDevOpsGuy Tech
+# Version 3.5.0
 
 # Ensure we're in the correct directory
 $scriptPath = $MyInvocation.MyCommand.Path
-$scriptDir = Split-Path -Parent $scriptPath
+$scriptDir  = Split-Path -Parent $scriptPath
 Set-Location -Path $scriptDir
 
 # Script Configuration
 $CONFIG = @{
-    LogFile = 'install_devops_tools.log'
-    StateFile = 'installation_state.json'
-    PreferredPackageManager = 'choco'
-    ParallelInstallation = $false
-    MaxParallelJobs = 3
-    CheckSystemRequirements = $true
+    LogFile                   = Join-Path $scriptDir 'install_devops_tools.log'
+    StateFile                 = Join-Path (Split-Path $scriptDir -Parent) 'devops_state.json'
+    PreferredPackageManager   = 'choco'
+    ParallelInstallation      = $false
+    MaxParallelJobs           = 3
+    CheckSystemRequirements   = $true
 }
 
 # Initialize logging at script start
@@ -27,42 +28,42 @@ function Initialize-Logging {
     }
 }
 
-# Function: Write log message
+# Function: Write log message (thread-safe)
 function Write-Log {
     param(
         [string]$Message,
         [ValidateSet('Info', 'Warning', 'Error', 'Success')]
         [string]$Level = 'Info'
     )
-    
+
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $color = switch ($Level) {
-        'Info' { 'White' }
+        'Info'    { 'White' }
         'Warning' { 'Yellow' }
-        'Error' { 'Red' }
+        'Error'   { 'Red' }
         'Success' { 'Green' }
     }
-    
+
     Write-Host "[$timestamp] $Level : $Message" -ForegroundColor $color
-    
-    # Use a mutex for file access with proper disposal and timeout
-    $mutex = $null
+
+    $mutex    = $null
+    $acquired = $false
     try {
-        $mutex = [System.Threading.Mutex]::OpenExisting("DevOpsToolInstallerLogMutex")
+        try {
+            $mutex = [System.Threading.Mutex]::OpenExisting("DevOpsToolInstallerLogMutex")
+        } catch {
+            $mutex = New-Object System.Threading.Mutex($false, "DevOpsToolInstallerLogMutex")
+        }
+
+        $acquired = $mutex.WaitOne(1000)
+        if ($acquired) {
+            "[$timestamp] $Level : $Message" | Out-File -FilePath $CONFIG.LogFile -Append -Encoding utf8
+        }
     } catch {
-        $mutex = New-Object System.Threading.Mutex($false, "DevOpsToolInstallerLogMutex")
-    }
-    
-    try {
-        [void]$mutex.WaitOne(1000) # 1 second timeout
-        "[$timestamp] $Level : $Message" | Out-File -FilePath $CONFIG.LogFile -Append -Encoding utf8
-    }
-    catch {
         Write-Host "Warning: Could not write to log file: $_" -ForegroundColor Yellow
-    }
-    finally {
-        if ($mutex) {
-            $mutex.ReleaseMutex()
+    } finally {
+        if ($mutex -ne $null) {
+            if ($acquired) { $mutex.ReleaseMutex() }
             $mutex.Dispose()
         }
     }
@@ -71,29 +72,37 @@ function Write-Log {
 # Function: Check System Requirements
 function Test-SystemRequirements {
     Write-Log 'Checking system requirements...' -Level Info
-    
-    # Add TLS 1.2 support
+
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-    
+
+    # Internet check via lightweight web request (faster than Test-NetConnection)
+    $internetOk = $false
+    try {
+        $null = Invoke-WebRequest -Uri 'https://www.google.com' -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+        $internetOk = $true
+    } catch {
+        $internetOk = $false
+    }
+
     $requirements = @{
-        'PowerShell Version' = @{
-            Test = $PSVersionTable.PSVersion.Major -ge 5
+        'PowerShell Version'   = @{
+            Test    = $PSVersionTable.PSVersion.Major -ge 5
             Message = 'PowerShell 5.0 or higher is required'
         }
-        'Admin Rights' = @{
-            Test = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        'Admin Rights'         = @{
+            Test    = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
             Message = 'Administrator privileges are required'
         }
-        'Internet Connection' = @{
-            Test = Test-NetConnection -ComputerName '8.8.8.8' -Port 443 -WarningAction SilentlyContinue
+        'Internet Connection'  = @{
+            Test    = $internetOk
             Message = 'Internet connection is required'
         }
         'Available Disk Space' = @{
-            Test = (Get-PSDrive -Name C).Free -gt 10GB
+            Test    = (Get-PSDrive -Name C).Free -gt 10GB
             Message = 'At least 10GB of free disk space is required'
         }
-        'TLS 1.2 Support' = @{
-            Test = [System.Net.ServicePointManager]::SecurityProtocol -band 3072
+        'TLS 1.2 Support'      = @{
+            Test    = [bool]([System.Net.ServicePointManager]::SecurityProtocol -band 3072)
             Message = 'TLS 1.2 support is required'
         }
     }
@@ -104,34 +113,32 @@ function Test-SystemRequirements {
             Write-Log ('[X] {0}: {1}' -f $req.Key, $req.Value.Message) -Level Error
             $allPassed = $false
         } else {
-            Write-Log ('[√] {0}: Passed' -f $req.Key) -Level Success
+            Write-Log ('[OK] {0}: Passed' -f $req.Key) -Level Success
         }
     }
-    
+
     return $allPassed
 }
 
 # Function: Check and Install Package Manager
 function Initialize-PackageManager {
-    # Check if running as Administrator
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
         Write-Host 'This script requires Administrator privileges. Please run as Administrator.' -ForegroundColor Red
         exit 1
     }
 
-    # Check for Chocolatey
+    # Install Chocolatey if missing
     if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
         Write-Host 'Installing Chocolatey package manager...' -ForegroundColor Yellow
         try {
             Set-ExecutionPolicy Bypass -Scope Process -Force
             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
             $installScript = (New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')
-            
-            # Save script to temp file and execute instead of Invoke-Expression
+
             $tempFile = [System.IO.Path]::GetTempFileName()
             $installScript | Out-File -FilePath $tempFile -Encoding utf8
-            
+
             try {
                 & $tempFile
                 if ($LASTEXITCODE -ne 0) {
@@ -140,13 +147,12 @@ function Initialize-PackageManager {
             } finally {
                 Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
             }
-            
+
             # Reload PATH
-            $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-            $userPath = [System.Environment]::GetEnvironmentVariable('Path', 'User')
-            $env:Path = '{0};{1}' -f $machinePath, $userPath
-            
-            # Verify installation
+            $env:Path = '{0};{1}' -f `
+                [System.Environment]::GetEnvironmentVariable('Path', 'Machine'), `
+                [System.Environment]::GetEnvironmentVariable('Path', 'User')
+
             if (Get-Command choco -ErrorAction SilentlyContinue) {
                 Write-Host 'Chocolatey installed successfully!' -ForegroundColor Green
             } else {
@@ -154,11 +160,11 @@ function Initialize-PackageManager {
             }
         } catch {
             Write-Log "Failed to install Chocolatey: $_" -Level Error
-            Write-Host "Failed to install Chocolatey package manager. Please check the logs for details." -ForegroundColor Red
+            Write-Host "Failed to install Chocolatey. Please check the logs for details." -ForegroundColor Red
         }
     }
-    
-    # Check for winget if it's the preferred package manager
+
+    # Winget check
     if ($CONFIG.PreferredPackageManager -eq 'winget' -and -not (Get-Command winget -ErrorAction SilentlyContinue)) {
         Write-Host 'Winget is not installed. Please install App Installer from the Microsoft Store.' -ForegroundColor Red
         exit 1
@@ -167,7 +173,7 @@ function Initialize-PackageManager {
 
 # Function: Display Header UI
 function Show-Header {
-    $version = '2.5.0'
+    $version = '3.5.0'
     Clear-Host
     Write-Host ([string]::Empty)
     Write-Host '+====================================================================+' -ForegroundColor Cyan
@@ -176,12 +182,12 @@ function Show-Header {
     Write-Host '|                                                                    |' -ForegroundColor Cyan
     Write-Host '+====================================================================+' -ForegroundColor Cyan
     Write-Host ([string]::Empty)
-    Write-Host 'Features:'
-    Write-Host '  * Multi-package manager support (choco and Winget)'
-    Write-Host '  * Parallel installation support'
-    Write-Host '  * Tool health checks and validation'
-    Write-Host '  * Installation state persistence'
-    Write-Host '  * Advanced error handling and logging'
+    Write-Host 'Features:' -ForegroundColor Magenta
+    Write-Host '  * Multi-package manager support (Chocolatey and Winget)' -ForegroundColor White
+    Write-Host '  * Progress tracking per tool installation'                -ForegroundColor White
+    Write-Host '  * Tool health checks and validation'                      -ForegroundColor White
+    Write-Host '  * Installation state persistence'                         -ForegroundColor White
+    Write-Host '  * Advanced error handling and logging'                    -ForegroundColor White
     Write-Host ([string]::Empty)
 }
 
@@ -201,9 +207,9 @@ function Get-InstallationState {
 # Function: Save Installation State
 function Save-InstallationState {
     param($State)
-    
+
     try {
-        $State | ConvertTo-Json | Set-Content $CONFIG.StateFile
+        $State | ConvertTo-Json -Depth 5 | Set-Content $CONFIG.StateFile -Encoding utf8
         Write-Log "Installation state saved successfully" -Level Success
     } catch {
         Write-Log "Failed to save installation state: $_" -Level Warning
@@ -216,42 +222,42 @@ function Show-Tools {
 
     $tools = @{
         "Containerization and Orchestration" = @(
-            @{Name="Docker Desktop"; Package="docker-desktop"},
-            @{Name="Kubernetes (kubectl)"; Package="kubernetes-cli"},
-            @{Name="Minikube"; Package="minikube"},
-            @{Name="Helm"; Package="kubernetes-helm"},
-            @{Name="Istio"; Package="istio"}
+            @{ Name = "Docker Desktop";        Package = "docker-desktop" },
+            @{ Name = "Kubernetes (kubectl)";  Package = "kubernetes-cli" },
+            @{ Name = "Minikube";              Package = "minikube" },
+            @{ Name = "Helm";                  Package = "kubernetes-helm" },
+            @{ Name = "Istio CLI (istioctl)";  Package = "istioctl" }
         )
         "Infrastructure as Code" = @(
-            @{Name="Terraform"; Package="terraform"},
-            @{Name="Ansible"; Package="ansible"},
-            @{Name="Packer"; Package="packer"},
-            @{Name="Vagrant"; Package="vagrant"}
+            @{ Name = "Terraform";  Package = "terraform" },
+            @{ Name = "Ansible";    Package = "ansible" },
+            @{ Name = "Packer";     Package = "packer" },
+            @{ Name = "Vagrant";    Package = "vagrant" }
         )
         "CI/CD and Version Control" = @(
-            @{Name="Jenkins"; Package="jenkins"},
-            @{Name="GitLab Runner"; Package="gitlab-runner"},
-            @{Name="Git"; Package="git"}
+            @{ Name = "Jenkins";        Package = "jenkins" },
+            @{ Name = "GitLab Runner";  Package = "gitlab-runner" },
+            @{ Name = "Git";            Package = "git" }
         )
         "Cloud Providers" = @(
-            @{Name="AWS CLI"; Package="awscli"},
-            @{Name="Azure CLI"; Package="azure-cli"},
-            @{Name="Google Cloud SDK"; Package="google-cloud-sdk"}
+            @{ Name = "AWS CLI";          Package = "awscli" },
+            @{ Name = "Azure CLI";        Package = "azure-cli" },
+            @{ Name = "Google Cloud SDK"; Package = "gcloudsdk" }
         )
         "Monitoring and Observability" = @(
-            @{Name="Prometheus"; Package="prometheus"},
-            @{Name="Grafana"; Package="grafana"}
+            @{ Name = "Prometheus"; Package = "prometheus" },
+            @{ Name = "Grafana";    Package = "grafana" }
         )
         "Service Mesh and Discovery" = @(
-            @{Name="HashiCorp Vault"; Package="vault"},
-            @{Name="HashiCorp Consul"; Package="consul"}
+            @{ Name = "HashiCorp Vault";   Package = "vault" },
+            @{ Name = "HashiCorp Consul";  Package = "consul" }
         )
     }
 
-    $index = 1
+    $index       = 1
     $toolMapping = @{}
 
-    foreach ($category in $tools.Keys) {
+    foreach ($category in $tools.Keys | Sort-Object) {
         Write-Host "`n[$category]" -ForegroundColor Cyan
         foreach ($tool in $tools[$category]) {
             Write-Host ("[{0,2}] {1}" -f $index, $tool.Name) -ForegroundColor Green
@@ -269,52 +275,48 @@ function Test-ToolInstallation {
         [string]$ToolName,
         [string]$PackageName
     )
-    
+
     Write-Log "Validating installation of $ToolName..." -Level Info
-    
-    $validationCommands = @{
-        "docker-desktop" = "docker --version"
-        "kubernetes-cli" = "kubectl version --client"
-        "terraform" = "terraform --version"
-        "ansible" = "ansible --version"
-        "awscli" = "aws --version"
-        "azure-cli" = "az --version"
-        "git" = "git --version"
+
+    $validationCmds = @{
+        "docker-desktop"  = @{ Exe = "docker";     Args = @("--version") }
+        "kubernetes-cli"  = @{ Exe = "kubectl";    Args = @("version", "--client") }
+        "terraform"       = @{ Exe = "terraform";  Args = @("--version") }
+        "ansible"         = @{ Exe = "ansible";    Args = @("--version") }
+        "awscli"          = @{ Exe = "aws";        Args = @("--version") }
+        "azure-cli"       = @{ Exe = "az";         Args = @("--version") }
+        "gcloudsdk"       = @{ Exe = "gcloud";     Args = @("--version") }
+        "git"             = @{ Exe = "git";        Args = @("--version") }
     }
-    
-    if ($validationCommands.ContainsKey($PackageName)) {
+
+    if ($validationCmds.ContainsKey($PackageName)) {
+        $vc = $validationCmds[$PackageName]
         try {
-            # Use Start-Process instead of Invoke-Expression for better security
-            $parts = $validationCommands[$PackageName] -split ' '
-            $exe = $parts[0]
-            $args = $parts[1..($parts.Length - 1)]
-            
-            $result = Start-Process -FilePath $exe -ArgumentList $args -NoNewWindow -Wait -PassThru -ErrorAction Stop
+            $result = Start-Process -FilePath $vc.Exe -ArgumentList $vc.Args -NoNewWindow -Wait -PassThru -ErrorAction Stop
             if ($result.ExitCode -eq 0) {
-                Write-Log "✅ $ToolName validated successfully" -Level Success
+                Write-Log "[OK] $ToolName validated successfully" -Level Success
                 return $true
             } else {
-                Write-Log "❌ $ToolName validation failed with exit code $($result.ExitCode)" -Level Error
+                Write-Log "[FAIL] $ToolName validation failed (exit code $($result.ExitCode))" -Level Error
                 return $false
             }
         } catch {
-            Write-Log "❌ $ToolName validation failed: $_" -Level Error
+            Write-Log "[FAIL] $ToolName validation failed: $_" -Level Error
             return $false
         }
     }
-    
-    # Default validation using where.exe
-    try {
-        where.exe $PackageName | Out-Null
-        Write-Log "✅ $ToolName found in PATH" -Level Success
+
+    # Generic: check if executable is on PATH using Get-Command (no external binary needed)
+    if (Get-Command $PackageName -ErrorAction SilentlyContinue) {
+        Write-Log "[OK] $ToolName found in PATH" -Level Success
         return $true
-    } catch {
-        Write-Log "❌ $ToolName not found in PATH" -Level Error
+    } else {
+        Write-Log "[FAIL] $ToolName not found in PATH" -Level Error
         return $false
     }
 }
 
-# Function: Install Tool
+# Function: Install a Single Tool
 function Install-Tool {
     param(
         [string]$ToolName,
@@ -323,71 +325,51 @@ function Install-Tool {
 
     try {
         Write-Host ('Installing "{0}" using {1}...' -f $ToolName, $CONFIG.PreferredPackageManager) -ForegroundColor Yellow
-        
+
         switch ($CONFIG.PreferredPackageManager) {
             'choco' {
                 if (Get-Command choco -ErrorAction SilentlyContinue) {
-                    $result = Start-Process -FilePath 'choco' -ArgumentList 'install', $PackageName, '-y' -NoNewWindow -Wait -PassThru
+                    $result = Start-Process -FilePath 'choco' -ArgumentList 'install', $PackageName, '-y', '--no-progress' -NoNewWindow -Wait -PassThru
                     if ($result.ExitCode -eq 0) {
                         Write-Host ('{0} installed successfully' -f $ToolName) -ForegroundColor Green
                         return $true
                     }
+                    Write-Host ('Chocolatey returned exit code {0} for {1}' -f $result.ExitCode, $ToolName) -ForegroundColor Red
+                    return $false
                 } else {
-                    Write-Host 'Chocolatey (choco) is not available. Installing Chocolatey...' -ForegroundColor Yellow
-                    try {
-                        Set-ExecutionPolicy Bypass -Scope Process -Force
-                        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-                        $installScript = (New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')
-                        
-                        # Save script to temp file and execute instead of Invoke-Expression
-                        $tempFile = [System.IO.Path]::GetTempFileName()
-                        $installScript | Out-File -FilePath $tempFile -Encoding utf8
-                        
-                        try {
-                            & $tempFile
-                            if ($LASTEXITCODE -ne 0) {
-                                throw "Chocolatey installation failed with exit code $LASTEXITCODE"
-                            }
-                        } finally {
-                            Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+                    Write-Host 'Chocolatey not found. Attempting to install it first...' -ForegroundColor Yellow
+                    Initialize-PackageManager
+
+                    if (Get-Command choco -ErrorAction SilentlyContinue) {
+                        $result = Start-Process -FilePath 'choco' -ArgumentList 'install', $PackageName, '-y', '--no-progress' -NoNewWindow -Wait -PassThru
+                        if ($result.ExitCode -eq 0) {
+                            Write-Host ('{0} installed successfully' -f $ToolName) -ForegroundColor Green
+                            return $true
                         }
-                        
-                        # Reload PATH
-                        $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-                        $userPath = [System.Environment]::GetEnvironmentVariable('Path', 'User')
-                        $env:Path = '{0};{1}' -f $machinePath, $userPath
-                        
-                        # Try installation again
-                        if (Get-Command choco -ErrorAction SilentlyContinue) {
-                            $result = Start-Process -FilePath 'choco' -ArgumentList 'install', $PackageName, '-y' -NoNewWindow -Wait -PassThru
-                            if ($result.ExitCode -eq 0) {
-                                Write-Host ('{0} installed successfully' -f $ToolName) -ForegroundColor Green
-                                return $true
-                            }
-                        } else {
-                            Write-Host 'Failed to verify Chocolatey installation' -ForegroundColor Red
-                            return $false
-                        }
-                    } catch {
-                        Write-Host ('Failed to install Chocolatey: {0}' -f $_) -ForegroundColor Red
+                    } else {
+                        Write-Host 'Chocolatey could not be installed. Aborting.' -ForegroundColor Red
                         return $false
                     }
                 }
             }
             'winget' {
                 if (Get-Command winget -ErrorAction SilentlyContinue) {
-                    $result = Start-Process -FilePath 'winget' -ArgumentList 'install', $PackageName, '--accept-source-agreements', '--accept-package-agreements' -NoNewWindow -Wait -PassThru
+                    $result = Start-Process -FilePath 'winget' -ArgumentList `
+                        'install', $PackageName, '--accept-source-agreements', '--accept-package-agreements', '--silent' `
+                        -NoNewWindow -Wait -PassThru
                     if ($result.ExitCode -eq 0) {
                         Write-Host ('{0} installed successfully' -f $ToolName) -ForegroundColor Green
                         return $true
                     }
+                    Write-Host ('Winget returned exit code {0} for {1}' -f $result.ExitCode, $ToolName) -ForegroundColor Red
+                    return $false
                 } else {
                     Write-Host 'Winget is not available. Please install App Installer from the Microsoft Store.' -ForegroundColor Red
                     return $false
                 }
             }
         }
-        
+
         Write-Host ('Failed to install {0}' -f $ToolName) -ForegroundColor Red
         return $false
     } catch {
@@ -396,40 +378,68 @@ function Install-Tool {
     }
 }
 
-# Function: Install Tools in Parallel
-function Install-ToolsParallel {
+# Function: Show Installation Summary Table
+function Show-InstallationSummary {
     param(
-        [array]$ToolsToInstall
+        [System.Collections.Generic.List[hashtable]]$Results
     )
-    
-    foreach ($tool in $ToolsToInstall) {
-        Install-Tool -ToolName $tool.Name -PackageName $tool.Package
+
+    Write-Host ""
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+    Write-Host "  Installation Summary" -ForegroundColor Cyan
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+    Write-Host ("{0,-30} {1,-15} {2}" -f "Tool", "Status", "Notes") -ForegroundColor White
+    Write-Host ("-" * 70) -ForegroundColor Gray
+
+    $successCount = 0
+    $failCount    = 0
+
+    foreach ($r in $Results) {
+        $color  = if ($r.Success) { 'Green' } else { 'Red' }
+        $status = if ($r.Success) { '[OK]  ' } else { '[FAIL]' }
+        if ($r.Success) { $successCount++ } else { $failCount++ }
+
+        Write-Host ("{0} {1,-28} {2}" -f $status, $r.Name, $r.Notes) -ForegroundColor $color
     }
+
+    Write-Host ("-" * 70) -ForegroundColor Gray
+    Write-Host ("  Installed: {0}  |  Failed: {1}  |  Total: {2}" -f $successCount, $failCount, $Results.Count) -ForegroundColor White
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+    Write-Host ""
 }
 
 # Entry Point
 try {
+    Initialize-Logging
     Show-Header
-    
-    # Initialize package manager first
+
     Initialize-PackageManager
-    
+
     if ($CONFIG.CheckSystemRequirements -and -not (Test-SystemRequirements)) {
         Write-Host 'System requirements not met. Please address the issues above and try again.' -ForegroundColor Red
         exit 1
     }
-    
-    $toolMapping = Show-Tools
-    $selectedTools = @()
-    
+
+    $toolMapping    = Show-Tools
+    $selectedTools  = @()
+
     do {
-        $choice = Read-Host ([string]::Format("`nEnter the number of the tool to install (or 'done' to finish)"))
+        $choice = Read-Host ("`nEnter the number of the tool to install (or 'done' to finish, 'q' to quit)")
+        if ($choice -eq 'q') {
+            Write-Host 'Exiting installer.' -ForegroundColor Yellow
+            exit 0
+        }
         if ($choice -ne 'done') {
             try {
                 $index = [int]$choice
                 if ($toolMapping.ContainsKey($index)) {
-                    $selectedTools += $toolMapping[$index]
-                    Write-Host ([string]::Format('Added {0} to installation queue', $toolMapping[$index].Name)) -ForegroundColor Green
+                    # Avoid duplicates
+                    if ($selectedTools | Where-Object { $_.Package -eq $toolMapping[$index].Package }) {
+                        Write-Host ('{0} is already in the queue.' -f $toolMapping[$index].Name) -ForegroundColor Gray
+                    } else {
+                        $selectedTools += $toolMapping[$index]
+                        Write-Host ('Added [{0}] {1} to installation queue' -f $index, $toolMapping[$index].Name) -ForegroundColor Green
+                    }
                 } else {
                     Write-Host 'Invalid selection. Please enter a number from the list.' -ForegroundColor Yellow
                 }
@@ -437,20 +447,48 @@ try {
                 Write-Host 'Invalid input. Please enter a number or "done"' -ForegroundColor Yellow
             }
         }
-    } while ($choice -ne 'done' -and $choice -ne 'q')
-    
+    } while ($choice -ne 'done')
+
     if ($selectedTools.Count -eq 0) {
         Write-Host 'No tools selected for installation.' -ForegroundColor Yellow
         exit 0
     }
-    
-    Write-Host ([string]::Format("`nInstalling selected tools...")) -ForegroundColor Cyan
+
+    Write-Host ("`nInstalling {0} selected tool(s)..." -f $selectedTools.Count) -ForegroundColor Cyan
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+
+    $results = [System.Collections.Generic.List[hashtable]]::new()
+    $state   = Get-InstallationState
+    $i       = 0
+
     foreach ($tool in $selectedTools) {
-        Install-Tool -ToolName $tool.Name -PackageName $tool.Package
+        $i++
+        Write-Host ""
+        Write-Host ("[{0}/{1}] Installing: {2}" -f $i, $selectedTools.Count, $tool.Name) -ForegroundColor Cyan
+        Write-Host ("-" * 50) -ForegroundColor Gray
+
+        $success = Install-Tool -ToolName $tool.Name -PackageName $tool.Package
+
+        # Update state
+        $state | Add-Member -NotePropertyName $tool.Name -NotePropertyValue @{
+            status  = if ($success) { 'installed' } else { 'failed' }
+            date    = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+            version = 'N/A'
+        } -Force
+
+        $notes = if ($success) { 'Installed OK' } else { 'Installation failed — check logs' }
+        $results.Add(@{ Name = $tool.Name; Success = $success; Notes = $notes })
+
+        Write-Log ("{0}: {1}" -f $tool.Name, $(if ($success) { 'installed' } else { 'failed' })) -Level $(if ($success) { 'Success' } else { 'Error' })
     }
-    
-    Write-Host ([string]::Format("`nInstallation process completed!")) -ForegroundColor Green
+
+    Save-InstallationState -State $state
+    Show-InstallationSummary -Results $results
+
+    Write-Host "Installation process completed! Logs saved to:" -ForegroundColor Green
+    Write-Host "  $($CONFIG.LogFile)" -ForegroundColor Gray
+
 } catch {
-    Write-Host ([string]::Format('An error occurred: {0}', $_)) -ForegroundColor Red
+    Write-Host ('An error occurred: {0}' -f $_) -ForegroundColor Red
     exit 1
 }

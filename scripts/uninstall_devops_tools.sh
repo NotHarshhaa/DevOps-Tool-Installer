@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # uninstall_devops_tools.sh - Enhanced DevOps Tool Uninstaller by ProDevOpsGuy Tech
-# Version 3.0.0
+# Version 3.5.0
 
 # Config
 # Get the script directory path
@@ -14,7 +14,7 @@ declare -A CONFIG=(
     ["STATE_FILE"]="$ROOT_DIR/state/devops_state.json"
     ["DRY_RUN"]=false
     ["MAX_LOG_DIRS"]=10
-    ["VERSION"]="3.0.0"
+    ["VERSION"]="3.5.0"
 )
 
 # Color codes and emojis
@@ -24,6 +24,8 @@ YELLOW="\033[1;33m"
 BLUE="\033[1;34m"
 CYAN="\033[0;36m"
 PURPLE="\033[0;35m"
+GRAY="\033[0;37m"
+WHITE="\033[1;37m"
 RESET="\033[0m"
 SUCCESS="${GREEN}✅${RESET}"
 FAIL="${RED}❌${RESET}"
@@ -170,36 +172,29 @@ detect_os() {
     echo -e "${INFO} Detected OS: ${GREEN}$OS $VERSION${RESET}, using package manager: ${GREEN}$PKG_MANAGER${RESET}"
 }
 
-# Run command with dry run support - SECURE VERSION
+# Run command with dry run support
+# Uses 'bash -c' to safely execute multi-command strings (&&, ;, ||)
 run_cmd() {
     local cmd=$1
-    
-    # Validate command to prevent injection
+
     if [[ -z "$cmd" ]]; then
         log "ERROR" "Empty command provided"
         return 1
     fi
-    
-    # Check for dangerous patterns
-    local dangerous_patterns=('&&' '||' ';' '|' '`' '$(' '&')
-    for pattern in "${dangerous_patterns[@]}"; do
-        if [[ "$cmd" == *"$pattern"* ]]; then
-            log "ERROR" "Dangerous command pattern detected: $pattern"
-            return 1
-        fi
-    done
 
     if [[ "${CONFIG[DRY_RUN]}" == true ]]; then
         echo -e "${YELLOW}[DRY RUN] $cmd${RESET}"
         return 0
     else
-        log "INFO" "Executing: $cmd"
-        # Use array to avoid eval - split command safely
-        local cmd_array=($cmd)
-        if "${cmd_array[@]}"; then
+        log "INFO" "Executing uninstall command"
+        # Use bash -c to allow compound commands (&&, ;, ||)
+        # Commands come from our own controlled UNINSTALL_CMDS map, not user input
+        if bash -c "$cmd"; then
             return 0
         else
-            return $?
+            local exit_code=$?
+            log "ERROR" "Command failed with exit code $exit_code"
+            return $exit_code
         fi
     fi
 }
