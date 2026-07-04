@@ -115,13 +115,13 @@ Easily **install and uninstall essential DevOps tools** on **Linux & Windows** w
 #### 📌 Windows (PowerShell):  
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/master/devops.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/main/devops.ps1 | iex
 ```
 
 #### 📌 Linux (Bash):  
 
 ```bash
-curl -s https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/master/devops.sh | bash
+curl -s https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/main/devops.sh | bash
 ```
 
 These **combined launchers** (`devops.ps1` and `devops.sh`) automatically guide you to install or uninstall tools via an interactive prompt!
@@ -156,8 +156,8 @@ cd DevOps-Tool-Installer
 ### 🔍 Method 3: Manual Download (Recommended for Security)
 
 1. **Download the script manually:**
-   - Windows: [devops.ps1](https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/master/devops.ps1)
-   - Linux: [devops.sh](https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/master/devops.sh)
+   - Windows: [devops.ps1](https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/main/devops.ps1)
+   - Linux: [devops.sh](https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/main/devops.sh)
 
 2. **Verify the script contents** (security best practice)
 
@@ -191,7 +191,7 @@ cd DevOps-Tool-Installer
 Use the universal launcher:  
 
 ```bash
-curl -s https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/master/devops.sh | bash
+curl -s https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/main/devops.sh | bash
 ```
 
 ---
@@ -201,7 +201,7 @@ curl -s https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/mast
 Use PowerShell launcher:  
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/master/devops.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/main/devops.ps1 | iex
 ```
 
 ---
