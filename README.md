@@ -15,14 +15,18 @@ Easily **install and uninstall essential DevOps tools** on **Linux & Windows** w
 ✅ **One-Click Installation & Uninstallation** – Set up or clean up all required DevOps tools effortlessly.  
 ✅ **Multi-OS Support** – Works on **Ubuntu, Debian, CentOS, Fedora, Arch, Alpine & Windows**.  
 ✅ **Auto-Detection** – Automatically detects your OS and applies the correct package manager.  
-✅ **Interactive Checklist UI** – Select tools with `whiptail` (Linux) or menus (PowerShell).  
+✅ **Interactive Categorized Menus** – Select tools by number, range (`1-5`), list (`2,4`) or `all` — with live queue feedback.  
+✅ **CLI & Automation Friendly** – Every script supports non-interactive modes for pipelines and batch runs (e.g. `devops.sh install`, `install_devops_tools.ps1 -Install Terraform,Git`).  
+✅ **Dry Run Mode Everywhere** – Preview what would be installed/uninstalled on both Linux & Windows before changing anything.  
+✅ **Idempotent Installs** – Tools that already validate as installed are skipped automatically (opt-out with `-Reinstall`), so re-runs are always safe.  
+✅ **Retry Failed Installs** – Resume or repair partial runs from the state file (`--retry-failed` on Linux, or a retry prompt on Windows).  
+✅ **Tool Health Verification** – Re-check every installed tool against `PATH` at any time from the launcher (`verify` action).  
 ✅ **Advanced Cleanup** – Stops services, removes configs, logs, and binaries cleanly.  
-✅ **Dry Run Mode** – Simulate uninstallation before applying changes.  
-✅ **Timestamped Logs** – Every operation is logged for traceability.  
+✅ **Timestamped Logs** – Every operation is logged for traceability, with automatic log rotation and per-tool log cleanup.  
 ✅ **Universal Launchers** – Use a single `devops.ps1` / `devops.sh` to install or uninstall tools.  
 ✅ **🔒 Security-Hardened** – Eliminated command injection vulnerabilities and unsafe code execution.  
 ✅ **🛡️ Input Validation** – Comprehensive validation prevents malicious command injection.  
-✅ **⚡ Performance Optimized** – Improved resource management and deadlock prevention.  
+✅ **⚡ Performance Optimized** – Improved resource management, atomic state file writes and deadlock prevention.  
 ✅ **🚀 Enterprise Ready** – Production-grade security with 90%+ risk reduction.  
 
 ---
@@ -49,12 +53,13 @@ Easily **install and uninstall essential DevOps tools** on **Linux & Windows** w
 - **🔍 Debug Mode** – Detailed logging for troubleshooting and development
 
 ### ⚡ Performance & Reliability
-- **🚀 Parallel Installation Support** – Faster multi-tool installations with job limiting
+- **🚀 Parallel Installation Support** – Faster multi-tool installations with job limiting (`-j N`), timeout-aware background jobs, and accurate success/failure accounting
 - **⏱️ Timeout Management** – Prevents hanging operations with configurable timeouts
-- **🔄 Auto-Recovery** – Handles failed installations gracefully with rollback capabilities
-- **💾 Resource Management** – Optimizes system resource usage with proper cleanup
+- **🔄 Auto-Recovery** – Re-run `--retry-failed` (Linux) or the retry prompt (Windows) to repair partial installs from the state file
+- **💾 Atomic State Persistence** – `flock`-guarded, uniquely-templated state file updates keep `devops_state.json` safe during parallel installs
 - **🔧 Memory Leak Prevention** – Automatic cleanup of temporary resources and timeouts
-- **⚡ Concurrent Access** – Improved mutex handling for multiple script instances
+- **⚡ Concurrent Access** – Improved mutex and lock handling for multiple script instances
+- **🧹 Log Rotation** – Launcher and installer logs rotate/clean automatically so they never grow unbounded
 
 ### 🔄 Update & Maintenance
 - **🔔 Automatic Update Checks** – Notifies of new versions with GitHub API integration
@@ -62,6 +67,22 @@ Easily **install and uninstall essential DevOps tools** on **Linux & Windows** w
 - **🧹 Clean Uninstallation** – Complete removal of tools and configs with verification
 - **💾 Backup & Restore** – Saves configurations before major changes with automatic backup
 - **🔄 System Cleanup** – Removes unused packages and temporary files after operations
+
+### 🤖 Automation & CLI Support (NEW)
+
+Every script can now run **non-interactively** — perfect for CI pipelines, configuration management, and batch provisioning:
+
+| Script | Mode / Flags | Purpose |
+|--------|--------------|---------|
+| `devops.ps1` / `devops.sh` | `install` \| `uninstall` \| `update` \| `status` \| `info` \| `verify` \| `logs` | Run any launcher action and exit — no menu |
+| `devops.ps1` | `-NoUpdateCheck`, `-Yes` | Skip the startup update check / auto-confirm prompts |
+| `devops.sh` | `-s` (`--skip-update`), `-h` (`--help`) | Skip update check / show usage |
+| `install_devops_tools.ps1` | `-List`, `-Install Terraform,Git`, `-All`, `-DryRun`, `-Reinstall`, `-PackageManager winget`, `-SkipRequirements` | Non-interactive installs |
+| `install_devops_tools.sh` | `-l`, `-i "docker,terraform"`, `-a`, `-d` (`--dry-run`), `-s`/`-p`, `-j N`, `-r` (`--retry-failed`), `--skip-requirements` | Non-interactive installs |
+| `uninstall_devops_tools.ps1` | `-List`, `-Uninstall Docker,Terraform`, `-All`, `-DryRun`, `-Force` | Non-interactive uninstallation |
+| `uninstall_devops_tools.sh` | `-l`, `-u "docker,terraform"`, `-a`, `-d` (`--dry-run`), `-f` (`--force`) | Non-interactive uninstallation |
+
+> 💡 **Privileges**: elevation is only enforced for actions that change the system — read-only actions (`status`, `info`, `verify`, `logs`, `-DryRun`, `-List`) run as a normal user.
 
 ### 🌐 Cross-Platform Compatibility
 - **🐧 Linux Distribution Support** – Ubuntu, Debian, CentOS, RHEL, Fedora, Arch, Alpine, SUSE
@@ -74,37 +95,33 @@ Easily **install and uninstall essential DevOps tools** on **Linux & Windows** w
 
 ## 📌 Supported DevOps Tools  
 
+The catalog below is exactly what the scripts install/uninstall (run `-List` / `-l` on the installer any time for the authoritative list):
+
 ### 🔹 Containerization & Orchestration  
 
-✔️ **Docker** 🐳 | ✔️ **Kubernetes (kubectl)** ☸️ | ✔️ **Helm** ⛵ | ✔️ **Minikube** | ✔️ **Istio** | ✔️ **OpenShift CLI** | ✔️ **Podman** | ✔️ **Containerd**
+✔️ **Docker** 🐳 | ✔️ **Kubernetes (kubectl)** ☸️ | ✔️ **Minikube** | ✔️ **Helm** ⛵ | ✔️ **Istio (istioctl)** ⛴️ | ✔️ **Podman** 🦭
 
 ### 🔹 Infrastructure as Code & Automation  
 
-✔️ **Ansible** | ✔️ **Terraform** | ✔️ **Packer** | ✔️ **Vagrant** | ✔️ **ArgoCD** | ✔️ **Flux**
+✔️ **Terraform** | ✔️ **Ansible** | ✔️ **Packer** | ✔️ **Vagrant**
 
 ### 🔹 CI/CD & Version Control  
 
-✔️ **Jenkins** | ✔️ **GitLab Runner** | ✔️ **Git** | ✔️ **GitHub CLI** | ✔️ **Azure DevOps CLI**
+✔️ **Jenkins** 🤵 | ✔️ **GitLab Runner** | ✔️ **Git** | ✔️ **ArgoCD** | ✔️ **Flux**
 
 ### 🔹 Cloud Providers & CLI Tools  
 
-✔️ **AWS CLI** | ✔️ **Azure CLI** | ✔️ **Google Cloud SDK** | ✔️ **Oracle Cloud CLI** | ✔️ **DigitalOcean CLI**
+✔️ **AWS CLI** | ✔️ **Azure CLI** | ✔️ **Google Cloud SDK (gcloud)**
 
 ### 🔹 Monitoring & Observability  
 
-✔️ **Prometheus** | ✔️ **Grafana** | ✔️ **K9s** | ✔️ **Jaeger** | ✔️ **Elasticsearch** | ✔️ **Kibana**
+✔️ **Prometheus** 🔥 | ✔️ **Grafana** 📊 | ✔️ **K9s** 🐕
 
 ### 🔹 Service Mesh & Security  
 
-✔️ **Vault** | ✔️ **Consul** | ✔️ **Envoy** | ✔️ **Linkerd** | ✔️ **Open Policy Agent**
+✔️ **HashiCorp Vault** 🔐 | ✔️ **HashiCorp Consul** 🕸️
 
-### 🔹 Database & Data Tools  
-
-✔️ **PostgreSQL Client** | ✔️ **Redis CLI** | ✔️ **MongoDB CLI** | ✔️ **MySQL Client** | ✔️ **SQLite**
-
-### 🔹 Networking & Utilities  
-
-✔️ **cURL** | ✔️ **wget** | ✔️ **jq** | ✔️ **yq** | ✔️ **helmfile** | ✔️ **kubectl aliases**  
+> 🪟 **Windows note**: the PowerShell installer uses Chocolatey packages — a few catalog entries have Windows-specific package ids (e.g. `gcloudsdk`, `istioctl`) and Windows services (Jenkins, Prometheus, Grafana) are not started as services. The universal state file keeps both platforms in sync.
 
 ---
 
@@ -167,10 +184,66 @@ cd DevOps-Tool-Installer
 
 ---
 
+### 🤖 Method 4: Non-Interactive / Automation (CI-Friendly)
+
+Skip the menus entirely — ideal for scripts, pipelines, and cloud-init:
+
+#### 📌 Linux examples  
+
+```bash
+# Install specific tools without prompts (parallel by default)
+sudo scripts/install_devops_tools.sh -i "docker,terraform"
+
+# Install everything, sequentially, limited to 8 parallel jobs
+sudo scripts/install_devops_tools.sh -a -s -j 8
+
+# Preview what would be installed (dry run, no changes)
+sudo scripts/install_devops_tools.sh -d -i "kubernetes-cli,helm"
+
+# Re-install tools recorded as failed in the state file
+sudo scripts/install_devops_tools.sh -r
+
+# Uninstall tools without prompts (force), preview first (dry run)
+sudo scripts/uninstall_devops_tools.sh -u "docker,terraform" -f
+sudo scripts/uninstall_devops_tools.sh -d -u "docker,terraform"
+
+# Launcher one-shot actions
+./devops.sh status
+./devops.sh verify
+./devops.sh logs
+```
+
+#### 📌 Windows examples  
+
+```powershell
+# Install specific tools without prompts
+powershell -File scripts\install_devops_tools.ps1 -Install Terraform,Git
+
+# Install everything (already-installed tools are skipped automatically)
+powershell -File scripts\install_devops_tools.ps1 -All
+
+# Preview a plan (no changes), or reinstall over existing tools
+powershell -File scripts\install_devops_tools.ps1 -DryRun -Install Git
+powershell -File scripts\install_devops_tools.ps1 -Reinstall -Install Git
+
+# Uninstall tools without prompts, or list them first
+powershell -File scripts\uninstall_devops_tools.ps1 -Uninstall Docker,Terraform
+powershell -File scripts\uninstall_devops_tools.ps1 -List
+
+# Launcher one-shot actions
+.\devops.ps1 status
+.\devops.ps1 verify
+.\devops.ps1 logs
+```
+
+Additionally, **interactive tool menus accept multi-select**: enter `3`, a range like `1-5`, a list like `2,4`, or `all` — `l` re-lists the catalog (Windows), and the Linux menus show the same numbering across runs (categories are sorted for stable numbering).
+
+---
+
 ### 🛡️ Security Requirements  
 
-- **Windows**: PowerShell 5.0+ and Administrator privileges
-- **Linux**: Bash 4.0+ and root/sudo privileges
+- **Windows**: PowerShell 5.0+ ; Administrator privileges required for install/uninstall actions (read-only actions — `status`, `info`, `verify`, `logs`, `-DryRun`, `-List` — run as a normal user)
+- **Linux**: Bash 4.0+ ; root/sudo required for install/uninstall actions (`jq`, `curl` required for update checks, verified automatically)
 - **Network**: Internet connection for downloads and updates
 - **Disk**: Minimum 10GB free space for installations
 - **TLS**: TLS 1.2 support for secure connections
@@ -181,10 +254,36 @@ cd DevOps-Tool-Installer
 
 🧹 This tool supports **clean uninstallation** with:  
 
-- ✅ Interactive selection  
-- ✅ Advanced cleanup (configs, services, logs)  
-- ✅ Dry run mode for previewing changes  
+- ✅ Interactive selection with installed-status detection (`[Installed]` / `[Not Found]`)
+- ✅ Multi-select and range selection (`3`, `1-5`, `2,4`, `all installed`)
+- ✅ Advanced cleanup (services, configs, logs, binaries, even APT/Choco package purge)
+- ✅ Dry run mode on **both platforms** (`-d` / `--dry-run` on Linux, `-DryRun` on Windows)
+- ✅ Forced non-interactive runs (`-f` / `--force` on Linux, `-Force` on Windows)
 - ✅ Timestamped logs saved in the `logs/` folder  
+
+### 🔧 CLI examples  
+
+```bash
+# Linux: preview, then remove specific tools without prompts
+sudo scripts/uninstall_devops_tools.sh -d -u "docker,terraform"
+sudo scripts/uninstall_devops_tools.sh -u "docker,terraform" -f
+
+# Linux: remove every tool detected as installed
+sudo scripts/uninstall_devops_tools.sh -a
+
+# List the catalog with installed status
+sudo scripts/uninstall_devops_tools.sh -l
+```
+
+```powershell
+# Windows: list tools with installed status, then uninstall without prompts
+powershell -File scripts\uninstall_devops_tools.ps1 -List
+powershell -File scripts\uninstall_devops_tools.ps1 -Uninstall Docker,Terraform
+
+# Dry run, or remove every detected tool
+powershell -File scripts\uninstall_devops_tools.ps1 -DryRun -Uninstall Docker,Terraform
+powershell -File scripts\uninstall_devops_tools.ps1 -All
+```
 
 ### 🔧 Linux & macOS  
 
@@ -206,17 +305,53 @@ iwr -useb https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/ma
 
 ---
 
-🧭 **After running the launcher**, you'll be prompted to:  
+🧭 **After running the launcher**, you'll be prompted with an 8-option menu:  
 
-- Select **Install Tools** or **Uninstall Tools**  
-- Choose the tools from an interactive checklist  
-- Run the selected operation with full logging
+1. **Install Tools**
+2. **Uninstall Tools**
+3. **Check for Updates**
+4. **View Installation Status**
+5. **System Information**
+6. **Verify Installed Tools** – re-checks every tool recorded in the state file against `PATH`
+7. **View Recent Logs** – tail the manager, installer, and uninstaller logs
+8. **Exit**
+
+Optionally run any of these directly without the menu (`install`, `uninstall`, `update`, `status`, `info`, `verify`, `logs`).
 
 ---
 
 ## 📋 What's New  
+
+### 🚀 Latest Updates (v3.5.x) - AUTOMATION & RELIABILITY RELEASE
+
+#### ✨ New Features
+- 🤖 **Full CLI / automation support** – every script now runs non-interactively: launcher actions (`install`, `uninstall`, `update`, `status`, `info`, `verify`, `logs`), plus flags like `-Install`, `-All`, `-DryRun`, `-List`, `-Force`, `-j N` on the installers and uninstallers
+- 🔍 **Verify Installed Tools** (new launcher option 6 + `verify` action) – re-checks every tool recorded in the state file against `PATH` and reports `[OK]` / `[MISSING]`
+- 📜 **View Recent Logs** (new launcher option 7 + `logs` action) – tails the manager, installer, and uninstaller logs in one place
+- 🔢 **Multi-select & range menus** – pick tools by number (`3`), range (`1-5`), list (`2,4`) or `all`; the Linux catalog is sorted so menu numbers are stable across runs
+- ♻️ **Idempotent installs** (Windows) – tools that already validate as installed are skipped automatically; use `-Reinstall` to force a reinstall
+- 🔁 **Retry failed installations** – `--retry-failed` on Linux (driven by the state file) and a retry prompt after the summary on Windows, with the state file and summary updated accordingly
+- 🧪 **Dry run everywhere** – `install_devops_tools.sh -d` and `install_devops_tools.ps1 -DryRun` now cover both directions (install *and* uninstall) on both platforms, making zero changes to the system
+- 🌱 **Privilege checks refined** – Administrators/root are only required for actions that change the system; read-only actions work as a normal user (also fixed a 1000× wrong "Free RAM" readout in the Windows system info dashboard)
+- 📝 **Log hygiene** – 10 MB log rotation in the launchers and PowerShell installer, plus newest-5 cleanup for per-tool installer logs
+- 🙈 **Git hygiene** – added a `.gitignore` for runtime artifacts (`logs/`, `state/`, `backups/`, `config/`, `*.log`)
+- 📚 **`-List` / `-l` catalog mode** – print the complete tool catalog (with installed status on the uninstaller) without any prompts
+
+#### 🐛 Stability & Correctness Fixes
+- 🐧 **Fixed apt/apk installs never running** – `if ! sudo apt-get update && sudo apt-get install ...` negated only the update (bash precedence), so packages were never installed when the update succeeded
+- 🐞 **Fixed failed installs reported as success** – `timeout ... | tee` masked real exit codes; now uses `PIPESTATUS` + `set -o pipefail`, and parallel install subshells propagate their true status so success/failure counters are accurate
+- 💾 **Atomic state file writes** – `flock`-based locking plus unique temp files stop parallel installs from corrupting `devops_state.json`; dry-run no longer writes any state
+- 🎯 **Fixed package-name mismatches (Windows uninstaller)** – now targets the same Chocolatey packages the installer uses (`gcloudsdk`, `istioctl`), aligned tool labels, and added the missing `Git`
+- 📦 **Fixed Chocolatey bootstrap** – the install script was saved as `.tmp` and could not be executed via `&`; also refreshed `PATH` after installs and accepted MSI "reboot required" exit codes (3010/1641) as success
+- 🗜️ **Fixed self-update extraction (Windows)** – GitHub archives extract to `DevOps-Tool-Installer-v<version>`; the updater now detects the extracted root and no longer backs up its own backups (Linux: excludes `backups/`, `logs/`, `state/`)
+- 🔐 **Update version parsing hardened** – non-semver tags no longer crash `[version]` casts or the semver comparison
+- 📸 **Fixed choco package detection** – matcher now understands `--limit-output` `pkg|version` lines, so installed tools are detected correctly (was reporting everything "Not Found")
+- 🗑️ **Linux uninstaller** – now purges apt-installed `kubectl`, portable log-cleanup (no GNU-only `head -n -N`), and `--force` skips the "tool in use" prompt
+- ⚙️ **Linux installer** – `install_base_requirements` branches per package manager instead of hardcoding `apt-get`; removed `sudo` for a root-only context (and the broken unquoted `dnf check-update || true` string)
+- 🧯 **Hardened Chocolatey version checks** – guarded `choco --version` parsing against unexpected output
+- 🖥️ **Windows launcher hardening** – graceful `ReadKey` fallback in ISE/CI hosts, guarded extraction of update archives, and sub-script exit codes are reported instead of always "completed successfully"
  
-### 🆕 Latest Updates (v3.5.0) - MAJOR STABILITY & UX RELEASE
+### 🔄 Previous Updates (v3.5.0) - MAJOR STABILITY & UX RELEASE
 - 🚀 **Option 5 System Information fully implemented** in PowerShell with detailed OS, CPU, RAM, disk, package managers, and network checks
 - 🛠️ **PowerShell Installer Progress Tracking & Summary** – Displays interactive progress `[N/Total]` and a final summary table of installation status
 - 🔴 **PowerShell State File Mismatches Resolved** – Aligned state file location at repository root so the installation status dashboard displays correctly
@@ -257,6 +392,9 @@ iwr -useb https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/ma
 2️⃣ Choose **Install** or **Uninstall**  
 3️⃣ Select tools interactively  
 4️⃣ Script detects your OS and uses the appropriate package manager  
+5️⃣ All operations are validated, logged, and tracked in the state file — then verified from the launcher
+
+> 🤖 No time for menus? Jump to **Method 4** in the Installation Guide for the non-interactive CLI modes.
 
 ### OS-Specific Package Managers  
 
