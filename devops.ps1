@@ -80,9 +80,16 @@ function Test-Updates {
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
 
         $response = Invoke-RestMethod -Uri $CONFIG.UpdateCheckUrl -Method Get -TimeoutSec 10
-        $latestVersion = $response.tag_name -replace 'v', ''
+        $latestVersion = "$($response.tag_name)" -replace '^v', ''
 
-        if ([version]$latestVersion -gt [version]$CONFIG.Version) {
+        # Guard against non-numeric tags (e.g. 'release-3.6' or prerelease names)
+        # which would throw when cast to [version]
+        $parsedLatest  = $null
+        $parsedCurrent = $null
+        [void][version]::TryParse($latestVersion, [ref]$parsedLatest)
+        [void][version]::TryParse($CONFIG.Version, [ref]$parsedCurrent)
+
+        if ($parsedLatest -ne $null -and $parsedCurrent -ne $null -and $parsedLatest -gt $parsedCurrent) {
             Write-Log "New version available: v$latestVersion" -Level Warning
             $choice = Read-Host "Would you like to update? (y/n)"
             if ($choice -match '^[Yy]$') {
@@ -132,9 +139,15 @@ function Update-Script {
 
         Expand-Archive -Path $tempFile -DestinationPath $extractPath -Force
 
-        # Copy updated files
-        $sourcePath = Join-Path $extractPath "DevOps-Tool-Installer-$Version"
-        Get-ChildItem -Path $sourcePath | Copy-Item -Destination $PSScriptRoot -Recurse -Force
+        # Copy updated files. GitHub archives extract into
+        # "DevOps-Tool-Installer-v<version>" (note the 'v' prefix), so detect
+        # the single extracted root folder instead of hard-coding the name.
+        $extractedRoot = Get-ChildItem -Path $extractPath -Directory | Select-Object -First 1
+        if ($extractedRoot -eq $null) {
+            throw "Update archive extracted to an unexpected structure at: $extractPath"
+        }
+        Get-ChildItem -Path $extractedRoot.FullName -Exclude "devops_manager.log", "devops_state.json" |
+            Copy-Item -Destination $PSScriptRoot -Recurse -Force
 
         # Cleanup
         Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
@@ -317,7 +330,8 @@ function Show-SystemInformation {
         $ram = Get-CimInstance -ClassName Win32_ComputerSystem
         $totalRAM_GB = [math]::Round($ram.TotalPhysicalMemory / 1GB, 2)
         $freeRAM = Get-CimInstance -ClassName Win32_OperatingSystem
-        $freeRAM_GB = [math]::Round($freeRAM.FreePhysicalMemory / 1MB, 2)
+        # FreePhysicalMemory is reported in kilobytes
+        $freeRAM_GB = [math]::Round($freeRAM.FreePhysicalMemory / 1KB, 2)
 
         Write-Host ("  {0,-25} {1}" -f "CPU:",          $cpu.Name.Trim())        -ForegroundColor White
         Write-Host ("  {0,-25} {1}" -f "Cores:",        "$($cpu.NumberOfCores) physical / $($cpu.NumberOfLogicalProcessors) logical") -ForegroundColor White
@@ -413,7 +427,11 @@ function Invoke-Script {
         Write-Log "Launching $scriptType script..." -Level Info
         try {
             & $scriptPath
-            Write-Log "$scriptType completed successfully" -Level Success
+            if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) {
+                Write-Log "$scriptType reported exit code $LASTEXITCODE" -Level Error
+            } else {
+                Write-Log "$scriptType completed successfully" -Level Success
+            }
         } catch {
             Write-Log "$scriptType failed: $_" -Level Error
         }
@@ -462,6 +480,11 @@ do {
     if ($choice -ne "6") {
         Write-Host ""
         Write-Host "Press any key to return to main menu..." -ForegroundColor Cyan
-        $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+        # RawUI.ReadKey is unavailable in some hosts (ISE, redirected I/O, CI runs)
+        try {
+            $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+        } catch {
+            $null = Read-Host "Press Enter to return to main menu"
+        }
     }
 } while ($choice -ne "6")

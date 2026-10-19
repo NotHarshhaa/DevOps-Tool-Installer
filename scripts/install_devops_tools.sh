@@ -5,6 +5,10 @@
 
 # Don't exit on errors immediately to allow for better error handling
 set +e
+# Propagate the real exit code of pipelines (won't be masked by tee, grep, etc.)
+# so installation failures are correctly detected instead of silently succeeding.
+set -o pipefail
+shopt -s inherit_errexit 2>/dev/null || true
 
 # Script Configuration
 # Get the script directory path
@@ -104,30 +108,54 @@ init_state_file() {
     fi
 }
 
+# Internal helper: perform one atomic state update
+_perform_state_update() {
+    local tool=$1
+    local status=$2
+    local version=$3
+    local date=$4
+
+    # Check if the tool already exists in the state file
+    local exists=$(jq -r --arg tool "$tool" '.[] | select(.name == $tool) | .name' "${CONFIG[STATE_FILE]}" 2>/dev/null)
+
+    if [[ -n "$exists" ]]; then
+        # Update existing entry
+        jq --arg tool "$tool" --arg status "$status" --arg date "$date" --arg version "$version" \
+           '[.[] | if .name == $tool then {name: $tool, status: $status, date: $date, version: $version} else . end]' \
+           "${CONFIG[STATE_FILE]}" > "${CONFIG[STATE_FILE]}.tmp.$$"
+    else
+        # Add new entry
+        jq --arg tool "$tool" --arg status "$status" --arg date "$date" --arg version "$version" \
+           '. += [{name: $tool, status: $status, date: $date, version: $version}]' \
+           "${CONFIG[STATE_FILE]}" > "${CONFIG[STATE_FILE]}.tmp.$$"
+    fi
+
+    if [[ $? -eq 0 ]]; then
+        # Atomically replace the original file (unique tmp name avoids clashes
+        # when tools are installed in parallel)
+        mv "${CONFIG[STATE_FILE]}.tmp.$$" "${CONFIG[STATE_FILE]}"
+    else
+        rm -f "${CONFIG[STATE_FILE]}.tmp.$$" 2>/dev/null || true
+        log "WARN" "Failed to update state for $tool"
+    fi
+}
+
 # Update the state file with installation status
+# Uses flock when available so parallel installs don't corrupt the state JSON
 update_state() {
     local tool=$1
     local status=$2
     local version=$3
     local date=$(date '+%Y-%m-%d %H:%M:%S')
 
-    # Check if the tool already exists in the state file
-    local exists=$(jq -r --arg tool "$tool" '.[] | select(.name == $tool) | .name' "${CONFIG[STATE_FILE]}")
-
-    if [[ -n "$exists" ]]; then
-        # Update existing entry
-        jq --arg tool "$tool" --arg status "$status" --arg date "$date" --arg version "$version" \
-           '[.[] | if .name == $tool then {name: $tool, status: $status, date: $date, version: $version} else . end]' \
-           "${CONFIG[STATE_FILE]}" > "${CONFIG[STATE_FILE]}.tmp"
+    if command -v flock >/dev/null 2>&1; then
+        (
+            flock -x 200
+            _perform_state_update "$tool" "$status" "$version" "$date"
+        ) 200>"${CONFIG[STATE_FILE]}.lock"
     else
-        # Add new entry
-        jq --arg tool "$tool" --arg status "$status" --arg date "$date" --arg version "$version" \
-           '. += [{name: $tool, status: $status, date: $date, version: $version}]' \
-           "${CONFIG[STATE_FILE]}" > "${CONFIG[STATE_FILE]}.tmp"
+        _perform_state_update "$tool" "$status" "$version" "$date"
     fi
-
-    # Replace the original file
-    mv "${CONFIG[STATE_FILE]}.tmp" "${CONFIG[STATE_FILE]}"
 }
 
 # Detect OS and package manager
@@ -150,11 +178,11 @@ detect_os() {
         centos | rhel | fedora | amazon)
             if [[ -x "$(command -v dnf)" ]]; then
                 PKG_MANAGER="dnf"
-                PKG_UPDATE="dnf check-update || true"
+                PKG_UPDATE="dnf check-update"
                 PKG_INSTALL="dnf install -y"
             else
                 PKG_MANAGER="yum"
-                PKG_UPDATE="yum check-update || true"
+                PKG_UPDATE="yum check-update"
                 PKG_INSTALL="yum install -y"
             fi
             ;;
@@ -189,24 +217,52 @@ install_base_requirements() {
     log "INFO" "Installing base requirements for all tools..."
     echo -e "${INFO} Installing base requirements for all tools..."
 
-    # Essential packages for most installations
-    local base_packages="apt-transport-https ca-certificates curl wget gnupg lsb-release software-properties-common unzip"
-
-    echo -e "${INFO} Installing: $base_packages"
-    apt-get update
-    if apt-get install -y $base_packages; then
-        log "SUCCESS" "Installed base requirements"
-        echo -e "${SUCCESS} Installed base requirements"
-    else
-        log "ERROR" "Failed to install some base requirements"
-        echo -e "${WARN} Failed to install some base requirements, but continuing anyway"
-    fi
+    # Essential packages for most installations, per package manager
+    case "$PKG_MANAGER" in
+        apt-get)
+            local base_packages="apt-transport-https ca-certificates curl wget gnupg lsb-release software-properties-common unzip"
+            echo -e "${INFO} Installing: $base_packages"
+            if apt-get update && apt-get install -y $base_packages; then
+                log "SUCCESS" "Installed base requirements"
+                echo -e "${SUCCESS} Installed base requirements"
+            else
+                log "ERROR" "Failed to install some base requirements"
+                echo -e "${WARN} Failed to install some base requirements, but continuing anyway"
+            fi
+            # Make sure certificates are up to date
+            update-ca-certificates --fresh || true
+            ;;
+        dnf|yum)
+            if $PKG_MANAGER install -y ca-certificates curl wget gnupg2 unzip tar; then
+                log "SUCCESS" "Installed base requirements"
+                echo -e "${SUCCESS} Installed base requirements"
+            else
+                log "WARN" "Failed to install some base requirements, but continuing anyway"
+                echo -e "${WARN} Failed to install some base requirements, but continuing anyway"
+            fi
+            ;;
+        pacman)
+            pacman -Sy --noconfirm --needed ca-certificates curl wget gnupg unzip tar || {
+                log "WARN" "Failed to install some base requirements, but continuing anyway"
+                echo -e "${WARN} Failed to install some base requirements, but continuing anyway"
+            }
+            ;;
+        zypper)
+            zypper install -y ca-certificates curl wget gpg2 unzip tar || {
+                log "WARN" "Failed to install some base requirements, but continuing anyway"
+                echo -e "${WARN} Failed to install some base requirements, but continuing anyway"
+            }
+            ;;
+        apk)
+            apk add --no-cache ca-certificates curl wget gnupg unzip tar || {
+                log "WARN" "Failed to install some base requirements, but continuing anyway"
+                echo -e "${WARN} Failed to install some base requirements, but continuing anyway"
+            }
+            ;;
+    esac
 
     # Create common directories
     mkdir -p /etc/apt/keyrings
-
-    # Make sure certificates are up to date
-    update-ca-certificates --fresh || true
 }
 
 # Check system requirements
@@ -259,10 +315,11 @@ check_system_requirements() {
         echo -e "${WARN} Missing required commands: ${missing_cmds[*]}"
         echo -e "${INFO} Installing missing commands..."
 
-        # Install missing commands
+        # Install missing commands (script already runs as root - no sudo needed,
+        # and sudo may not even exist in minimal container images)
         for cmd in "${missing_cmds[@]}"; do
             echo -e "${INFO} Installing $cmd..."
-            if sudo $PKG_INSTALL $cmd; then
+            if $PKG_INSTALL "$cmd"; then
                 log "SUCCESS" "Installed $cmd"
             else
                 log "ERROR" "Failed to install $cmd"
@@ -282,8 +339,10 @@ update_package_repositories() {
     log "INFO" "Updating package repositories..."
     echo -e "${INFO} Updating package repositories..."
 
-    # Use safe command execution instead of eval
-    if ! sudo $PKG_UPDATE; then
+    # Package-manager strings (e.g. 'dnf check-update') are executed through a
+    # controlled shell so they parse correctly.
+    # Running as root already, so no sudo.
+    if ! bash -c "$PKG_UPDATE"; then
         log "WARN" "Failed to update package repositories. Continuing anyway."
         echo -e "${WARN} Failed to update package repositories. Continuing anyway."
     else
@@ -358,13 +417,18 @@ EOF
     log "DEBUG" "Command to execute: ${INSTALL_CMDS[$tool]}"
     echo -e "${CYAN}Executing installation commands...${RESET}"
 
-    # Install with timeout and capture output
+    # Install with timeout and capture output.
+    # Capture the *installer's* exit code via PIPESTATUS - a pipeline's status is
+    # normally tee's, which always succeeds and masked installation failures.
     local output_file=$(mktemp)
     echo -e "${CYAN}Running installation script for $tool...${RESET}"
     echo -e "${CYAN}See live output below:${RESET}"
     echo -e "${YELLOW}----------------------------------------${RESET}"
-    if timeout "${CONFIG[TIMEOUT]}" bash "$temp_script" 2>&1 | tee "$output_file"; then
-        echo -e "${YELLOW}----------------------------------------${RESET}"
+    timeout "${CONFIG[TIMEOUT]}" bash "$temp_script" 2>&1 | tee "$output_file"
+    local exit_code=${PIPESTATUS[0]}
+    echo -e "${YELLOW}----------------------------------------${RESET}"
+
+    if [[ $exit_code -eq 0 ]]; then
         echo -e "${GREEN}Installation commands completed successfully${RESET}"
         rm -f "$temp_script" "$output_file"
 
@@ -382,13 +446,12 @@ EOF
             return 1
         fi
     else
-        local exit_code=$?
         # Show error output
         echo -e "${RED}Installation failed with output:${RESET}"
         cat "$output_file"
         rm -f "$temp_script" "$output_file"
 
-        if [ $exit_code -eq 124 ]; then
+        if [[ $exit_code -eq 124 ]]; then
             log "ERROR" "$tool installation timed out after ${CONFIG[TIMEOUT]}s"
             echo -e "${FAIL} $tool installation timed out after ${CONFIG[TIMEOUT]}s"
         else
@@ -513,7 +576,11 @@ cli_tool_prompt() {
     # Print directly to stdout (not to a pipe)
     printf "\n${YELLOW}🔧 Available Tools:${RESET}\n\n" > /dev/tty
 
-    for category in "${!TOOL_CATEGORIES[@]}"; do
+    # Sort categories so tool numbers are stable between runs
+    local sorted_categories=()
+    mapfile -t sorted_categories < <(printf '%s\n' "${!TOOL_CATEGORIES[@]}" | sort)
+
+    for category in "${sorted_categories[@]}"; do
         printf "\n${CYAN}[$category]${RESET}\n" > /dev/tty
         for tool in ${TOOL_CATEGORIES[$category]}; do
             printf "${GREEN}[%2d] %-30s${RESET}\n" "$index" "$tool" > /dev/tty
@@ -531,7 +598,7 @@ cli_tool_prompt() {
     if [[ "$selection" = "all" ]]; then
         # Return all tools
         local all_tools_str=""
-        for category in "${!TOOL_CATEGORIES[@]}"; do
+        for category in "${sorted_categories[@]}"; do
             all_tools_str+=" ${TOOL_CATEGORIES[$category]}"
         done
         echo "$all_tools_str"
@@ -698,28 +765,35 @@ EOF
             # Log the command that will be executed for debugging
             log "DEBUG" "Command to execute: ${INSTALL_CMDS[$tool]}"
 
-            # Launch in background with timeout and capture output
+            # Launch in background with timeout and capture output.
+            # The subshell must exit with the installer's real status so the
+            # surrounding job-scheduler can count successes/failures correctly.
             echo -e "${INFO} Starting installation of ${CYAN}$tool${RESET} in parallel..."
             (
                 timeout "${CONFIG[TIMEOUT]}" bash "$temp_script" 2>&1 | tee "$output_file"
-                local status=$?
+                local status=${PIPESTATUS[0]}
+
+                # Store the full log in a persistent location
+                mkdir -p "${CONFIG[LOG_DIR]}/$tool"
+                cp "$output_file" "${CONFIG[LOG_DIR]}/$tool/install_$(date +%Y%m%d_%H%M%S).log"
 
                 if [[ $status -eq 0 ]]; then
                     local version=$(eval "${VERSION_CMDS[$tool]}" 2>/dev/null || echo "Unknown")
                     echo -e "${SUCCESS} $tool installed successfully (version: ${GREEN}$version${RESET})"
                     update_state "$tool" "installed" "$version"
                 else
-                    echo -e "${FAIL} $tool installation failed with status $status"
+                    if [[ $status -eq 124 ]]; then
+                        echo -e "${FAIL} $tool installation timed out after ${CONFIG[TIMEOUT]}s"
+                    else
+                        echo -e "${FAIL} $tool installation failed with status $status"
+                    fi
                     echo -e "${RED}Last 10 lines of output:${RESET}"
                     tail -n 10 "$output_file" | sed 's/^/    /'
                     update_state "$tool" "failed" "Unknown"
                 fi
 
-                # Store the full log in a persistent location
-                mkdir -p "${CONFIG[LOG_DIR]}/$tool"
-                cp "$output_file" "${CONFIG[LOG_DIR]}/$tool/install_$(date +%Y%m%d_%H%M%S).log"
-
                 rm -f "$temp_script" "$output_file"
+                exit $status
             ) &
 
             local pid=$!

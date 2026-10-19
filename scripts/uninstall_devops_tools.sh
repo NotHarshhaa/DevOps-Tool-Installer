@@ -60,7 +60,10 @@ cleanup_old_logs() {
     if [[ -d "$parent_dir" ]]; then
         local log_count=$(find "$parent_dir" -name "uninstall_*" -type d | wc -l)
         if [[ "$log_count" -gt "${CONFIG[MAX_LOG_DIRS]}" ]]; then
-            find "$parent_dir" -name "uninstall_*" -type d | sort | head -n -"${CONFIG[MAX_LOG_DIRS]}" | xargs rm -rf
+            # Keep only the newest MAX_LOG_DIRS dirs.
+            # Avoid 'head -n -N' (GNU-only) so this also works on busybox (Alpine).
+            local to_delete=$((log_count - CONFIG[MAX_LOG_DIRS]))
+            find "$parent_dir" -name "uninstall_*" -type d | sort | head -n "$to_delete" | xargs rm -rf
             log "INFO" "Cleaned up old log directories"
         fi
     fi
@@ -202,7 +205,7 @@ run_cmd() {
 # Uninstall commands per tool - SECURE VERSION
 declare -A UNINSTALL_CMDS=(
     [docker]="systemctl stop docker 2>/dev/null || true; $PKG_PURGE docker* containerd.io docker-ce docker-ce-cli 2>/dev/null || true; rm -rf /var/lib/docker /etc/docker /var/run/docker.sock 2>/dev/null || true; groupdel docker 2>/dev/null || true"
-    [kubernetes-cli]="rm -f /usr/local/bin/kubectl 2>/dev/null || true"
+    [kubernetes-cli]="$PKG_PURGE kubectl 2>/dev/null || true; rm -f /usr/local/bin/kubectl /usr/bin/kubectl 2>/dev/null || true"
     [ansible]="$PKG_PURGE ansible 2>/dev/null || true"
     [terraform]="$PKG_PURGE terraform 2>/dev/null || true; rm -f /usr/local/bin/terraform 2>/dev/null || true"
     [helm]="$PKG_PURGE helm 2>/dev/null || true; rm -f /usr/local/bin/helm 2>/dev/null || true"
@@ -288,7 +291,10 @@ cli_tool_prompt() {
     local index=1
     local all_tools=()
 
-    for category in "${!TOOL_CATEGORIES[@]}"; do
+    local sorted_categories=()
+    mapfile -t sorted_categories < <(printf '%s\n' "${!TOOL_CATEGORIES[@]}" | sort)
+
+    for category in "${sorted_categories[@]}"; do
         printf "\n${CYAN}[$category]${RESET}\n" > /dev/tty
         for tool in ${TOOL_CATEGORIES[$category]}; do
             # Check if tool is actually installed by running verification command
@@ -309,7 +315,9 @@ cli_tool_prompt() {
     if [[ "$selection" = "all" ]]; then
         # Return all tools
         local all_tools_str=""
-        for category in "${!TOOL_CATEGORIES[@]}"; do
+        local sorted_categories=()
+        mapfile -t sorted_categories < <(printf '%s\n' "${!TOOL_CATEGORIES[@]}" | sort)
+        for category in "${sorted_categories[@]}"; do
             all_tools_str+=" ${TOOL_CATEGORIES[$category]}"
         done
         echo "$all_tools_str"
@@ -319,11 +327,14 @@ cli_tool_prompt() {
         local installed_tools=""
         local all_tools_str=""
 
-        for category in "${!TOOL_CATEGORIES[@]}"; do
-            all_tools_str+=" ${TOOL_CATEGORIES[$category]}"
-        done
+    local sorted_categories=()
+    mapfile -t sorted_categories < <(printf '%s\n' "${!TOOL_CATEGORIES[@]}" | sort)
 
-        for tool in $all_tools_str; do
+    for category in "${sorted_categories[@]}"; do
+        all_tools_str+=" ${TOOL_CATEGORIES[$category]}"
+    done
+
+    for tool in $all_tools_str; do
             if bash -c "${VERIFY_CMDS[$tool]}" >/dev/null 2>&1; then
                 installed_tools+="$tool "
             fi

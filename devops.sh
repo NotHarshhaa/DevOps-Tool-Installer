@@ -52,8 +52,19 @@ init_logging() {
     fi
 
     # Rotate logs if they get too large (>10MB)
-    if [[ -f "${CONFIG[LOG_FILE]}" ]] && [[ $(stat -c%s "${CONFIG[LOG_FILE]}") -gt 10485760 ]]; then
-        mv "${CONFIG[LOG_FILE]}" "${CONFIG[LOG_FILE]}.$(date +%Y%m%d_%H%M%S).bak"
+    # Use GNU stat, BSD stat, or ls -l fall back for portability
+    if [[ -f "${CONFIG[LOG_FILE]}" ]]; then
+        local log_size
+        if log_size=$(stat -c%s "${CONFIG[LOG_FILE]}" 2>/dev/null); then
+            :
+        elif log_size=$(stat -f%z "${CONFIG[LOG_FILE]}" 2>/dev/null); then
+            :
+        else
+            log_size=$(wc -c < "${CONFIG[LOG_FILE]}")
+        fi
+        if [[ "$log_size" -gt 10485760 ]]; then
+            mv "${CONFIG[LOG_FILE]}" "${CONFIG[LOG_FILE]}.$(date +%Y%m%d_%H%M%S).bak"
+        fi
     fi
 
     # Append all output to log file without interfering with terminal display
@@ -141,7 +152,8 @@ install_required_tools() {
         
         case $pkg_manager in
             "apt-get")
-                if ! sudo apt-get update && sudo apt-get -y install "$package"; then
+                # NOTE: '!' must wrap BOTH commands, otherwise only the update is negated
+                if ! { sudo apt-get update && sudo apt-get -y install "$package"; }; then
                     log "ERROR" "Failed to install $tool"
                     echo -e "${RED}Failed to install $tool.${RESET}"
                 else
@@ -181,7 +193,7 @@ install_required_tools() {
                 fi
                 ;;
             "apk")
-                if ! sudo apk update && sudo apk add "$package"; then
+                if ! { sudo apk update && sudo apk add "$package"; }; then
                     log "ERROR" "Failed to install $tool"
                     echo -e "${RED}Failed to install $tool.${RESET}"
                 else
@@ -211,9 +223,9 @@ check_updates() {
         return 1
     fi
 
-    # Parse version with error handling
+    # Parse version with error handling (strip only a leading 'v', not every 'v')
     local latest_version
-    if ! latest_version=$(echo "$response" | jq -r '.tag_name' 2>/dev/null | tr -d 'v'); then
+    if ! latest_version=$(echo "$response" | jq -r '.tag_name' 2>/dev/null | sed 's/^v//'); then
         log "ERROR" "Failed to parse version information"
         return 1
     fi
@@ -283,10 +295,14 @@ update_script() {
         log "WARN" "Checksum file not available. Skipping verification."
     fi
 
-    # Backup current version
+    # Backup current version (exclude runtime/data dirs so we don't back up
+    # the backups directory into itself on every update)
     local backup_dir="${CONFIG[BACKUP_DIR]}/backup_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
-    find . -maxdepth 1 -not -path "./.*" -not -path "." -exec cp -r {} "$backup_dir/" \;
+    find . -maxdepth 1 -not -path "./.*" -not -path "." \
+        -not -path "./backups" -not -path "./logs" \
+        -not -path "./state" -not -path "./config" \
+        -exec cp -r {} "$backup_dir/" \;
     log "INFO" "Backed up current version to $backup_dir"
 
     echo -e "${BLUE}Installing update...${RESET}"
@@ -310,6 +326,10 @@ update_script() {
     log "SUCCESS" "Update completed successfully"
     echo -e "${GREEN}Update completed successfully.${RESET}"
     echo -e "${BLUE}Previous version backed up in: $backup_dir${RESET}"
+
+    # Clean up temp directory before exec (EXIT trap won't fire after exec)
+    rm -rf "$temp_dir"
+    trap - EXIT
 
     # Restart the script to use the new version
     echo -e "${YELLOW}Restarting script to use the new version...${RESET}"

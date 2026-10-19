@@ -95,15 +95,23 @@ function Test-Prerequisites {
     Write-Log 'Checking prerequisites...' -Level Info
     
     # Check if Chocolatey is installed
-    if (-not (Get-Command 'choco.exe' -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command 'choco' -ErrorAction SilentlyContinue)) {
         Write-Log 'Chocolatey is not installed. Cannot proceed with uninstallation.' -Level Error
         return $false
     }
-    
-    # Check Chocolatey version
-    $chocoVersion = (choco --version)
-    if ([version]$chocoVersion -lt [version]$CONFIG.ChocolateyMinVersion) {
-        Write-Log ('Chocolatey version {0} is below minimum required version {1}' -f $chocoVersion, $CONFIG.ChocolateyMinVersion) -Level Warning
+
+    # Check Chocolatey version (guarded: unexpected output would break the [version] cast)
+    try {
+        $chocoVersion = (& choco --version 2>$null | Select-Object -First 1).Trim()
+        if ($chocoVersion -match '^\d') {
+            if ([version]$chocoVersion -lt [version]$CONFIG.ChocolateyMinVersion) {
+                Write-Log ('Chocolatey version {0} is below minimum recommended version {1}' -f $chocoVersion, $CONFIG.ChocolateyMinVersion) -Level Warning
+            }
+        } else {
+            Write-Log "Could not determine Chocolatey version (output: '$chocoVersion'). Continuing." -Level Warning
+        }
+    } catch {
+        Write-Log "Could not determine Chocolatey version. Continuing: $_" -Level Warning
     }
     
     return $true
@@ -129,10 +137,10 @@ function Show-Tools {
     Write-Host "This may take a few seconds..." -ForegroundColor Gray
 
     $tools = @(
-        'Docker', 'Kubernetes (kubectl)', 'Ansible', 'Terraform', 'Jenkins',
+        'Docker Desktop', 'Kubernetes (kubectl)', 'Ansible', 'Terraform', 'Jenkins',
         'AWS CLI', 'Azure CLI', 'Google Cloud SDK', 'Helm', 'Prometheus',
-        'Grafana', 'GitLab Runner (Runner)', 'HashiCorp Vault', 'HashiCorp Consul',
-        'Minikube', 'Istio', 'OpenShift CLI', 'Packer', 'Vagrant'
+        'Grafana', 'GitLab Runner', 'HashiCorp Vault', 'HashiCorp Consul',
+        'Minikube', 'Istio CLI (istioctl)', 'Packer', 'Vagrant', 'Git'
     )
 
     # Check installation status for each tool
@@ -157,9 +165,9 @@ function Get-InstalledTools {
     foreach ($tool in $packageMap.Keys) {
         $package = $packageMap[$tool]
         try {
-            # Chocolatey 2.x: 'choco list <pkg>' without --exact is sufficient;
-            # match on package name in the output line rather than the summary count.
-            $listOutput = & choco list $package 2>$null
+            # --limit-output gives clean "package version" lines with no localized
+            # header/summary lines, making the match reliable across choco versions.
+            $listOutput = & choco list --limit-output $package 2>$null
             $found = $listOutput | Where-Object { $_ -match "^$([regex]::Escape($package))\s" }
             if ($found) {
                 [void]$installedTools.Add($tool)
@@ -174,27 +182,30 @@ function Get-InstalledTools {
 }
 
 # Function: Map Tool Names to Chocolatey Package Names
+# Package names must match the ones used by install_devops_tools.ps1,
+# otherwise the uninstall commands would target packages that were never
+# installed (e.g. 'google-cloud-sdk' instead of 'gcloudsdk').
 function Get-PackageMap {
     return @{
-        'Docker' = 'docker-desktop'
-        'Kubernetes (kubectl)' = 'kubernetes-cli'
-        'Ansible' = 'ansible'
-        'Terraform' = 'terraform'
-        'Jenkins' = 'jenkins'
-        'AWS CLI' = 'awscli'
-        'Azure CLI' = 'azure-cli'
-        'Google Cloud SDK' = 'google-cloud-sdk'
-        'Helm' = 'kubernetes-helm'
-        'Prometheus' = 'prometheus'
-        'Grafana' = 'grafana'
-        'GitLab Runner (Runner)' = 'gitlab-runner'
-        'HashiCorp Vault' = 'vault'
-        'HashiCorp Consul' = 'consul'
-        'Minikube' = 'minikube'
-        'Istio' = 'istio'
-        'OpenShift CLI' = 'openshift-cli'
-        'Packer' = 'packer'
-        'Vagrant' = 'vagrant'
+        'Docker Desktop'        = 'docker-desktop'
+        'Kubernetes (kubectl)'  = 'kubernetes-cli'
+        'Ansible'               = 'ansible'
+        'Terraform'             = 'terraform'
+        'Jenkins'               = 'jenkins'
+        'AWS CLI'               = 'awscli'
+        'Azure CLI'             = 'azure-cli'
+        'Google Cloud SDK'      = 'gcloudsdk'
+        'Helm'                  = 'kubernetes-helm'
+        'Prometheus'            = 'prometheus'
+        'Grafana'               = 'grafana'
+        'GitLab Runner'         = 'gitlab-runner'
+        'HashiCorp Vault'       = 'vault'
+        'HashiCorp Consul'      = 'consul'
+        'Minikube'              = 'minikube'
+        'Istio CLI (istioctl)'  = 'istioctl'
+        'Packer'                = 'packer'
+        'Vagrant'               = 'vagrant'
+        'Git'                   = 'git'
     }
 }
 
@@ -249,9 +260,10 @@ function Uninstall-Tool {
     try {
         Write-Log ('Uninstalling {0} ({1})...' -f $toolName, $packageName) -Level Info
         
-        # Check if package is actually installed (Chocolatey 2.x compatible)
+        # Check if package is actually installed (--limit-output keeps output clean
+        # and works across Chocolatey versions)
         try {
-            $listOutput = & choco list $packageName 2>$null
+            $listOutput = & choco list --limit-output $packageName 2>$null
             $found = $listOutput | Where-Object { $_ -match "^$([regex]::Escape($packageName))\s" }
             if (-not $found) {
                 Write-Log ('{0} is not installed.' -f $toolName) -Level Warning

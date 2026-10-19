@@ -84,6 +84,11 @@ function Test-SystemRequirements {
         $internetOk = $false
     }
 
+    # Check free space on the actual system drive (not hard-coded C:)
+    $systemDriveName = $env:SystemDrive -replace ':', ''
+    $systemDrive = Get-PSDrive -Name $systemDriveName -ErrorAction SilentlyContinue
+    $diskSpaceOk = ($systemDrive -ne $null -and $systemDrive.Free -gt 10GB)
+
     $requirements = @{
         'PowerShell Version'   = @{
             Test    = $PSVersionTable.PSVersion.Major -ge 5
@@ -98,7 +103,7 @@ function Test-SystemRequirements {
             Message = 'Internet connection is required'
         }
         'Available Disk Space' = @{
-            Test    = (Get-PSDrive -Name C).Free -gt 10GB
+            Test    = $diskSpaceOk
             Message = 'At least 10GB of free disk space is required'
         }
         'TLS 1.2 Support'      = @{
@@ -136,7 +141,7 @@ function Initialize-PackageManager {
             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
             $installScript = (New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')
 
-            $tempFile = [System.IO.Path]::GetTempFileName()
+            $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("choco_install_{0}.ps1" -f [guid]::NewGuid().ToString('N'))
             $installScript | Out-File -FilePath $tempFile -Encoding utf8
 
             try {
@@ -269,6 +274,52 @@ function Show-Tools {
     return $toolMapping
 }
 
+# Function: Get Validation Command for a Package
+function Get-ValidationCommand {
+    param([string]$PackageName)
+
+    $validationCmds = @{
+        "docker-desktop"  = @{ Exe = "docker";     Args = @("--version") }
+        "kubernetes-cli"  = @{ Exe = "kubectl";    Args = @("version", "--client") }
+        "minikube"        = @{ Exe = "minikube";   Args = @("version") }
+        "kubernetes-helm" = @{ Exe = "helm";       Args = @("version") }
+        "istioctl"        = @{ Exe = "istioctl";   Args = @("version") }
+        "terraform"       = @{ Exe = "terraform";  Args = @("--version") }
+        "packer"          = @{ Exe = "packer";     Args = @("version") }
+        "vagrant"         = @{ Exe = "vagrant";    Args = @("--version") }
+        "jenkins"         = @{ Exe = "jenkins";    Args = @("--version") }
+        "gitlab-runner"   = @{ Exe = "gitlab-runner"; Args = @("--version") }
+        "ansible"         = @{ Exe = "ansible";    Args = @("--version") }
+        "awscli"          = @{ Exe = "aws";        Args = @("--version") }
+        "azure-cli"       = @{ Exe = "az";         Args = @("--version") }
+        "gcloudsdk"       = @{ Exe = "gcloud";     Args = @("--version") }
+        "prometheus"      = @{ Exe = "prometheus"; Args = @("--version") }
+        "grafana"         = @{ Exe = "grafana";    Args = @("--version") }
+        "vault"           = @{ Exe = "vault";      Args = @("version") }
+        "consul"          = @{ Exe = "consul";     Args = @("version") }
+        "git"             = @{ Exe = "git";        Args = @("--version") }
+    }
+
+    if ($validationCmds.ContainsKey($PackageName)) {
+        return $validationCmds[$PackageName]
+    }
+    return $null
+}
+
+# Function: Get Detected Version of an Installed Tool
+function Get-ToolVersion {
+    param([string]$PackageName)
+
+    $vc = Get-ValidationCommand -PackageName $PackageName
+    if ($null -ne $vc) {
+        try {
+            $output = & $vc.Exe $vc.Args 2>$null | Select-Object -First 1
+            if ($output) { return "$output".Trim() }
+        } catch { }
+    }
+    return 'N/A'
+}
+
 # Function: Validate Tool Installation
 function Test-ToolInstallation {
     param(
@@ -278,19 +329,8 @@ function Test-ToolInstallation {
 
     Write-Log "Validating installation of $ToolName..." -Level Info
 
-    $validationCmds = @{
-        "docker-desktop"  = @{ Exe = "docker";     Args = @("--version") }
-        "kubernetes-cli"  = @{ Exe = "kubectl";    Args = @("version", "--client") }
-        "terraform"       = @{ Exe = "terraform";  Args = @("--version") }
-        "ansible"         = @{ Exe = "ansible";    Args = @("--version") }
-        "awscli"          = @{ Exe = "aws";        Args = @("--version") }
-        "azure-cli"       = @{ Exe = "az";         Args = @("--version") }
-        "gcloudsdk"       = @{ Exe = "gcloud";     Args = @("--version") }
-        "git"             = @{ Exe = "git";        Args = @("--version") }
-    }
-
-    if ($validationCmds.ContainsKey($PackageName)) {
-        $vc = $validationCmds[$PackageName]
+    $vc = Get-ValidationCommand -PackageName $PackageName
+    if ($null -ne $vc) {
         try {
             $result = Start-Process -FilePath $vc.Exe -ArgumentList $vc.Args -NoNewWindow -Wait -PassThru -ErrorAction Stop
             if ($result.ExitCode -eq 0) {
@@ -323,56 +363,73 @@ function Install-Tool {
         [string]$PackageName
     )
 
+    # Helper: exit codes that mean success (0 = ok, 3010/1641 = success, reboot required)
+    function Test-InstallExitCode {
+        param([int]$Code)
+        return ($Code -eq 0 -or $Code -eq 3010 -or $Code -eq 1641)
+    }
+
+    # Helper: make freshly installed binaries visible again in this session
+    function Update-SessionPath {
+        $env:Path = '{0};{1}' -f `
+            [System.Environment]::GetEnvironmentVariable('Path', 'Machine'), `
+            [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    }
+
     try {
+        Write-Log "Installing '$ToolName' (package: $PackageName) using $($CONFIG.PreferredPackageManager)..." -Level Info
         Write-Host ('Installing "{0}" using {1}...' -f $ToolName, $CONFIG.PreferredPackageManager) -ForegroundColor Yellow
 
         switch ($CONFIG.PreferredPackageManager) {
             'choco' {
-                if (Get-Command choco -ErrorAction SilentlyContinue) {
-                    $result = Start-Process -FilePath 'choco' -ArgumentList 'install', $PackageName, '-y', '--no-progress' -NoNewWindow -Wait -PassThru
-                    if ($result.ExitCode -eq 0) {
-                        Write-Host ('{0} installed successfully' -f $ToolName) -ForegroundColor Green
-                        return $true
-                    }
-                    Write-Host ('Chocolatey returned exit code {0} for {1}' -f $result.ExitCode, $ToolName) -ForegroundColor Red
-                    return $false
-                } else {
+                if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
                     Write-Host 'Chocolatey not found. Attempting to install it first...' -ForegroundColor Yellow
                     Initialize-PackageManager
-
-                    if (Get-Command choco -ErrorAction SilentlyContinue) {
-                        $result = Start-Process -FilePath 'choco' -ArgumentList 'install', $PackageName, '-y', '--no-progress' -NoNewWindow -Wait -PassThru
-                        if ($result.ExitCode -eq 0) {
-                            Write-Host ('{0} installed successfully' -f $ToolName) -ForegroundColor Green
-                            return $true
-                        }
-                    } else {
+                    if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
                         Write-Host 'Chocolatey could not be installed. Aborting.' -ForegroundColor Red
                         return $false
                     }
                 }
+
+                $result = Start-Process -FilePath 'choco' -ArgumentList 'install', $PackageName, '-y', '--no-progress' -NoNewWindow -Wait -PassThru
+                if (Test-InstallExitCode $result.ExitCode) {
+                    Update-SessionPath
+                    Write-Host ('{0} installed successfully' -f $ToolName) -ForegroundColor Green
+                    return $true
+                }
+                Write-Log "Chocolatey returned exit code $($result.ExitCode) for $ToolName" -Level Error
+                Write-Host ('Chocolatey returned exit code {0} for {1}' -f $result.ExitCode, $ToolName) -ForegroundColor Red
+                return $false
             }
             'winget' {
-                if (Get-Command winget -ErrorAction SilentlyContinue) {
-                    $result = Start-Process -FilePath 'winget' -ArgumentList `
-                        'install', $PackageName, '--accept-source-agreements', '--accept-package-agreements', '--silent' `
-                        -NoNewWindow -Wait -PassThru
-                    if ($result.ExitCode -eq 0) {
-                        Write-Host ('{0} installed successfully' -f $ToolName) -ForegroundColor Green
-                        return $true
-                    }
-                    Write-Host ('Winget returned exit code {0} for {1}' -f $result.ExitCode, $ToolName) -ForegroundColor Red
-                    return $false
-                } else {
+                if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+                    Write-Log 'Winget is not available on this system.' -Level Error
                     Write-Host 'Winget is not available. Please install App Installer from the Microsoft Store.' -ForegroundColor Red
                     return $false
                 }
+
+                $result = Start-Process -FilePath 'winget' `
+                    -ArgumentList 'install', $PackageName, '--accept-source-agreements', '--accept-package-agreements', '--silent' `
+                    -NoNewWindow -Wait -PassThru
+                if (Test-InstallExitCode $result.ExitCode) {
+                    Update-SessionPath
+                    if ($result.ExitCode -ne 0) {
+                        Write-Log "$ToolName installed successfully (exit code $($result.ExitCode): reboot required)" -Level Success
+                    }
+                    Write-Host ('{0} installed successfully' -f $ToolName) -ForegroundColor Green
+                    return $true
+                }
+                Write-Log "Winget returned exit code $($result.ExitCode) for $ToolName" -Level Error
+                Write-Host ('Winget returned exit code {0} for {1}' -f $result.ExitCode, $ToolName) -ForegroundColor Red
+                return $false
             }
         }
 
+        Write-Log "Unsupported package manager: $($CONFIG.PreferredPackageManager)" -Level Error
         Write-Host ('Failed to install {0}' -f $ToolName) -ForegroundColor Red
         return $false
     } catch {
+        Write-Log "Error installing $ToolName : $($_.Exception.Message)" -Level Error
         Write-Host ('Error installing {0}: {1}' -f $ToolName, $_.Exception.Message) -ForegroundColor Red
         return $false
     }
@@ -469,14 +526,24 @@ try {
 
         $success = Install-Tool -ToolName $tool.Name -PackageName $tool.Package
 
+        # Validate the installation and capture the detected version
+        $version = 'N/A'
+        if ($success) {
+            if (Test-ToolInstallation -ToolName $tool.Name -PackageName $tool.Package) {
+                $version = Get-ToolVersion -PackageName $tool.Package
+            } else {
+                $success = $false
+            }
+        }
+
         # Update state
         $state | Add-Member -NotePropertyName $tool.Name -NotePropertyValue @{
             status  = if ($success) { 'installed' } else { 'failed' }
             date    = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-            version = 'N/A'
+            version = $version
         } -Force
 
-        $notes = if ($success) { 'Installed OK' } else { 'Installation failed — check logs' }
+        $notes = if ($success) { "Installed OK ($version)" } else { 'Installation failed — check logs' }
         $results.Add(@{ Name = $tool.Name; Success = $success; Notes = $notes })
 
         Write-Log ("{0}: {1}" -f $tool.Name, $(if ($success) { 'installed' } else { 'failed' })) -Level $(if ($success) { 'Success' } else { 'Error' })
