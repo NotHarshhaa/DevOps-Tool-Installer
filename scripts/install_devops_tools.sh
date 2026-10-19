@@ -43,12 +43,9 @@ FAIL="${RED}❌${RESET}"
 INFO="${BLUE}ℹ️${RESET}"
 WARN="${YELLOW}⚠️${RESET}"
 
-# Ensure the script runs with root privileges
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Error: This script must be run as root${RESET}"
-    echo -e "Please run with: ${GREEN}sudo $0${RESET}"
-    exit 1
-fi
+# Note: root privileges are enforced in main() (after argument parsing) so that
+# read-only modes (-h/--help, -l/--list, -d/--dry-run) run without elevation,
+# mirroring the PowerShell installer.
 
 # Create required directories
 create_required_dirs() {
@@ -201,6 +198,8 @@ usage_install_sh() {
     echo -e "  ${GREEN}-j, --jobs N${RESET}            Max parallel jobs (default ${CONFIG[MAX_PARALLEL_JOBS]})"
     echo -e "  ${GREEN}-d, --dry-run${RESET}           Show what would be installed without changing anything"
     echo -e "  ${GREEN}-r, --retry-failed${RESET}      Reinstall tools that previously failed (from the state file)"
+    echo -e "  ${GREEN}-U, --upgrade${RESET}           Upgrade installed tools only (a tool that is not installed is skipped)"
+    echo -e "  ${GREEN}    --from FILE${RESET}         Install tools listed in a profile file (see profiles/)"
     echo -e "  ${GREEN}    --skip-requirements${RESET} Skip the interactive system requirements check"
     echo -e "  ${YELLOW}-h, --help${RESET}              Show this help message"
 }
@@ -415,16 +414,28 @@ install_tool() {
     # Check if already installed - SECURE VERSION
     if bash -c "$verify_cmd" >/dev/null 2>&1; then
         local version=$(bash -c "$version_cmd" 2>/dev/null || echo "Unknown")
-        log "SUCCESS" "$tool is already installed (version: $version)"
-        echo -e "${SUCCESS} $tool is already installed (version: ${GREEN}$version${RESET})"
-        update_state "$tool" "installed" "$version"
+        if [[ "${CONFIG[UPGRADE]:-false}" == "true" ]]; then
+            log "INFO" "$tool is installed (version: $version) - upgrading"
+            echo -e "${INFO} $tool is installed (version: ${YELLOW}$version${RESET}) - upgrading..."
+        else
+            log "SUCCESS" "$tool is already installed (version: $version)"
+            echo -e "${SUCCESS} $tool is already installed (version: ${GREEN}$version${RESET})"
+            update_state "$tool" "installed" "$version"
+            return 0
+        fi
+    elif [[ "${CONFIG[UPGRADE]:-false}" == "true" ]]; then
+        # Upgrade mode leaves tools that are not installed alone
+        log "INFO" "$tool is not installed - skipped in upgrade mode"
+        echo -e "${INFO} $tool is not installed - skipped (upgrade mode)"
         return 0
     fi
 
     # Dry run: report the plan without changing anything
     if [[ "${CONFIG[DRY_RUN]}" == "true" ]]; then
-        log "INFO" "[DRY RUN] $tool would be installed with the following commands:"
-        echo -e "${WARN} [DRY RUN] $tool would be installed with the following commands:"
+        local action_word="installed"
+        [[ "${CONFIG[UPGRADE]:-false}" == "true" ]] && action_word="upgraded"
+        log "INFO" "[DRY RUN] $tool would be $action_word with the following commands:"
+        echo -e "${WARN} [DRY RUN] $tool would be $action_word with the following commands:"
         echo -e "  ${YELLOW}${INSTALL_CMDS[$tool]}${RESET}"
         return 0
     fi
@@ -781,17 +792,30 @@ install_parallel() {
             # Check if already installed first
             if eval "${VERIFY_CMDS[$tool]}" &>/dev/null; then
                 local version=$(eval "${VERSION_CMDS[$tool]}" 2>/dev/null || echo "Unknown")
-                log "SUCCESS" "$tool is already installed (version: $version)"
-                echo -e "${SUCCESS} $tool is already installed (version: ${GREEN}$version${RESET})"
-                update_state "$tool" "installed" "$version"
+                if [[ "${CONFIG[UPGRADE]:-false}" == "true" ]]; then
+                    log "INFO" "$tool is installed (version: $version) - upgrading"
+                    echo -e "${INFO} $tool is installed (version: ${YELLOW}$version${RESET}) - upgrading..."
+                else
+                    log "SUCCESS" "$tool is already installed (version: $version)"
+                    echo -e "${SUCCESS} $tool is already installed (version: ${GREEN}$version${RESET})"
+                    update_state "$tool" "installed" "$version"
+                    ((success++))
+                    continue
+                fi
+            elif [[ "${CONFIG[UPGRADE]:-false}" == "true" ]]; then
+                # Upgrade mode leaves tools that are not installed alone
+                log "INFO" "$tool is not installed - skipped in upgrade mode"
+                echo -e "${INFO} $tool is not installed - skipped (upgrade mode)"
                 ((success++))
                 continue
             fi
 
             # Dry run: report the plan without changing anything
             if [[ "${CONFIG[DRY_RUN]}" == "true" ]]; then
-                log "INFO" "[DRY RUN] $tool would be installed with the following commands:"
-                echo -e "${WARN} [DRY RUN] $tool would be installed with the following commands:"
+                local dry_action="installed"
+                [[ "${CONFIG[UPGRADE]:-false}" == "true" ]] && dry_action="upgraded"
+                log "INFO" "[DRY RUN] $tool would be $dry_action with the following commands:"
+                echo -e "${WARN} [DRY RUN] $tool would be $dry_action with the following commands:"
                 echo -e "  ${YELLOW}${INSTALL_CMDS[$tool]}${RESET}"
                 ((success++))
                 continue
@@ -915,8 +939,9 @@ main() {
     }
 
     # ---- Command line arguments (non-interactive automation support) ----
-    local CLI_MODE=false LIST_ONLY=false ALL_MODE=false DRY_RUN=false SKIP_REQUIREMENTS=false RETRY_FAILED=false
+    local CLI_MODE=false LIST_ONLY=false ALL_MODE=false DRY_RUN=false SKIP_REQUIREMENTS=false RETRY_FAILED=false UPGRADE=false
     local INSTALL_LIST=""
+    local PROFILE_FILE=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -925,6 +950,8 @@ main() {
             -i|--install) INSTALL_LIST="${2:-}"; CLI_MODE=true; shift ;;
             -a|--all) ALL_MODE=true; CLI_MODE=true ;;
             -r|--retry-failed) RETRY_FAILED=true; CLI_MODE=true ;;
+            -U|--upgrade) UPGRADE=true; CLI_MODE=true ;;
+            --from) PROFILE_FILE="${2:-}"; CLI_MODE=true; shift ;;
             -s|--sequential) CONFIG[PARALLEL_INSTALL]=false ;;
             -p|--parallel) CONFIG[PARALLEL_INSTALL]=true ;;
             -j|--jobs) CONFIG[MAX_PARALLEL_JOBS]="${2:-4}"; shift ;;
@@ -935,9 +962,22 @@ main() {
         shift
     done
 
+    # Root privileges are required for actions that change the system;
+    # read-only modes (help, list, dry-run) run as a normal user.
+    if [[ "$LIST_ONLY" != true && "$DRY_RUN" != true && $EUID -ne 0 ]]; then
+        echo -e "${RED}Error: This script must be run as root${RESET}"
+        echo -e "Please run with: ${GREEN}sudo $0${RESET}"
+        exit 1
+    fi
+
     if [[ "$DRY_RUN" == true ]]; then
         CONFIG["DRY_RUN"]="true"
         log "INFO" "Dry run mode enabled - no changes will be made"
+    fi
+
+    if [[ "$UPGRADE" == true ]]; then
+        CONFIG["UPGRADE"]="true"
+        log "INFO" "Upgrade mode enabled - only installed tools will be upgraded"
     fi
 
     show_banner
@@ -977,6 +1017,33 @@ main() {
         for category in "${sorted_categories[@]}"; do
             tools_input+=" ${TOOL_CATEGORIES[$category]}"
         done
+    elif [[ -n "$PROFILE_FILE" ]]; then
+        # Tool profile file with optional [windows]/[linux] sections;
+        # the Windows section is ignored here. Lines before any section
+        # header count as Linux entries, and '#' starts a comment.
+        if [[ ! -f "$PROFILE_FILE" ]]; then
+            log "ERROR" "Profile file not found: $PROFILE_FILE"
+            echo -e "${FAIL} Profile file not found: $PROFILE_FILE"
+            exit 1
+        fi
+        tools_input=$(awk '
+            /^[ \t]*#/ { next }
+            /^[ \t]*\[[^]]+\][ \t]*$/ {
+                sec=tolower($0)
+                gsub(/[ \t\[\]]/, "", sec)
+                next
+            }
+            /^[ \t]*$/ { next }
+            {
+                gsub(/[ \t]/, "", $0)
+                n=split($0, a, ",")
+                for (i = 1; i <= n; i++) {
+                    if (a[i] != "" && (sec == "" || sec == "linux")) printf "%s ", a[i]
+                }
+            }
+        ' "$PROFILE_FILE")
+        log "INFO" "Loaded tool selection from profile: $PROFILE_FILE"
+        echo -e "${INFO} Loaded tool selection from profile: ${BLUE}${PROFILE_FILE}${RESET}"
     elif [[ "$RETRY_FAILED" == true ]]; then
         # Reinstall everything previously recorded as failed in the state file
         tools_input=$(jq -r '.[] | select(.status == "failed") | .name' "${CONFIG[STATE_FILE]}" 2>/dev/null | sort -u | tr '\n' ' ')

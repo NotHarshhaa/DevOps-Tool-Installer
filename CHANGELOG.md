@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [Unreleased]
+
+### ✨ New Features
+
+- 🩺 **`doctor` health check** (new launcher action, Windows & Linux) – read-only environment diagnostics with CI-friendly exit codes: package managers, disk space, free RAM, network reachability, helper tools (`jq`/`curl`), state-file integrity, and log-directory writability; exits `1` only on hard failures
+- 👥 **Tool profiles** – `devops.ps1 export` / `devops.sh export` write the installed tool set to a shareable `profiles/devops_profile.txt` (with `[windows]` / `[linux]` sections); the installers re-apply it via `install_devops_tools.ps1 -Profile <file>` and `install_devops_tools.sh --from <file>` — workstation setup as code, platform-aware
+- ⬆️ **Upgrade mode** – new `upgrade` launcher action and installer flags (`-Upgrade` on Windows, `-U/--upgrade` on Linux) upgrade *only already installed tools*: missing tools are skipped on Linux, and on Windows `choco upgrade`/`winget upgrade` is used with automatic fallback to install for non-tracked packages
+- 🔓 **Read-only installer modes run without root (Linux)** – `-h/--help`, `-l/--list` and `-d/--dry-run` no longer require elevation (root is still enforced for real installs), matching the PowerShell installer's behavior
+
+---
+
 ## [3.5.x] - Automation & Reliability Release
 
 ### ✨ New Features

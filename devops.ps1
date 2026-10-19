@@ -5,7 +5,7 @@ param(
     #   install | uninstall | update | status | info | verify | logs
     # If omitted, the interactive menu is shown.
     [Parameter(Position = 0)]
-    [ValidateSet('', 'install', 'uninstall', 'update', 'status', 'info', 'verify', 'logs')]
+    [ValidateSet('', 'install', 'uninstall', 'update', 'status', 'info', 'verify', 'logs', 'doctor', 'export', 'upgrade')]
     [string]$Action = '',
 
     # Skip the automatic update check at startup
@@ -554,18 +554,203 @@ function Show-RecentLogs {
     Write-Host ""
 }
 
+# Function: Run environment health checks (read-only; returns 0 when healthy, 1 on failure)
+function Invoke-DoctorCheck {
+    $checks = [System.Collections.Generic.List[hashtable]]::new()
+
+    Write-Host ""
+    Write-Host "Environment Health Check" -ForegroundColor Blue
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+    Write-Host ""
+
+    # 1. Operating system
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem
+        $checks.Add(@{ Name = 'Operating system'; Status = 'OK'; Detail = ('{0} (build {1})' -f $os.Caption, $os.BuildNumber) })
+    } catch {
+        $checks.Add(@{ Name = 'Operating system'; Status = 'OK'; Detail = 'Windows' })
+    }
+
+    # 2. Elevation (informational - only system-changing actions need admin)
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $checks.Add(@{
+        Name   = 'Elevation'
+        Status = 'OK'
+        Detail = if ($isAdmin) { 'Administrator' } else { 'Standard user (only informational actions available)' }
+    })
+
+    # 3. Chocolatey (primary installer dependency)
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+        $chocoVersion = 'unknown'
+        try {
+            $raw = @(choco --version 2>$null)
+            if ($raw.Count -gt 0) { $chocoVersion = ($raw -join ' ').Split("`n")[0].Trim() }
+        } catch { $chocoVersion = 'unknown' }
+        $checks.Add(@{ Name = 'Chocolatey'; Status = 'OK'; Detail = "installed ($chocoVersion)" })
+    } else {
+        $checks.Add(@{ Name = 'Chocolatey'; Status = 'FAIL'; Detail = 'not installed - the installer cannot run' })
+    }
+
+    # 4. Winget (optional)
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        $checks.Add(@{ Name = 'Winget'; Status = 'OK'; Detail = 'available (alternate package manager)' })
+    } else {
+        $checks.Add(@{ Name = 'Winget'; Status = 'WARN'; Detail = 'not available (optional alternate package manager)' })
+    }
+
+    # 5. Disk space on the system drive
+    try {
+        $disk  = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$env:SystemDrive'"
+        $freeGB = [math]::Round($disk.FreeSpace / 1GB, 2)
+        $diskStatus = if ($freeGB -ge 10) { 'OK' } elseif ($freeGB -ge 5) { 'WARN' } else { 'FAIL' }
+        $checks.Add(@{ Name = 'Disk space'; Status = $diskStatus; Detail = ("{0} GB free on {1}" -f $freeGB, $env:SystemDrive) })
+    } catch {
+        $checks.Add(@{ Name = 'Disk space'; Status = 'WARN'; Detail = 'could not be determined' })
+    }
+
+    # 6. Free RAM
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem
+        $freeGB = [math]::Round(($os.FreePhysicalMemory * 1KB) / 1GB, 2)
+        $ramStatus = if ($freeGB -ge 2) { 'OK' } else { 'WARN' }
+        $checks.Add(@{ Name = 'Free RAM'; Status = $ramStatus; Detail = ("{0} GB" -f $freeGB) })
+    } catch {
+        $checks.Add(@{ Name = 'Free RAM'; Status = 'WARN'; Detail = 'could not be determined' })
+    }
+
+    # 7. Network reachability (update checks and downloads need it)
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $netOk = $false
+        foreach ($endpoint in 'https://api.github.com', 'https://chocolatey.org') {
+            try {
+                $null = Invoke-WebRequest -Uri $endpoint -Method Head -TimeoutSec 8 -UseBasicParsing
+                $netOk = $true
+                break
+            } catch { }
+        }
+        $checks.Add(@{
+            Name   = 'Network'
+            Status = if ($netOk) { 'OK' } else { 'FAIL' }
+            Detail = if ($netOk) { 'internet reachable (github.com / chocolatey.org)' } else { 'no connection to github.com or chocolatey.org' }
+        })
+    } catch {
+        $checks.Add(@{ Name = 'Network'; Status = 'FAIL'; Detail = 'connectivity test failed' })
+    }
+
+    # 8. State file
+    if (Test-Path $CONFIG.StateFile) {
+        try {
+            $state = Get-Content $CONFIG.StateFile | ConvertFrom-Json
+            $count = @($state.PSObject.Properties | Where-Object { $_.Value.status -eq 'installed' }).Count
+            $checks.Add(@{ Name = 'State file'; Status = 'OK'; Detail = "$count tool(s) recorded as installed" })
+        } catch {
+            $checks.Add(@{ Name = 'State file'; Status = 'FAIL'; Detail = "corrupt or unreadable ($($CONFIG.StateFile.Name))" })
+        }
+    } else {
+        $checks.Add(@{ Name = 'State file'; Status = 'WARN'; Detail = 'not present yet (run the installer to create it)' })
+    }
+
+    # 9. Log directory writability
+    try {
+        $testFile = Join-Path $PSScriptRoot '.doctor_write_test'
+        Set-Content -Path $testFile -Value 'test' -ErrorAction Stop
+        Remove-Item -Path $testFile -Force -ErrorAction SilentlyContinue
+        $checks.Add(@{ Name = 'Log directory'; Status = 'OK'; Detail = "$PSScriptRoot is writable" })
+    } catch {
+        $checks.Add(@{ Name = 'Log directory'; Status = 'WARN'; Detail = 'not writable - logging may fail in this location' })
+    }
+
+    # Render the results
+    $failCount = 0
+    $warnCount = 0
+    foreach ($check in $checks) {
+        $color = switch ($check.Status) {
+            'OK'   { 'Green' }
+            'WARN' { 'Yellow'; $warnCount++ }
+            default { 'Red'; $failCount++ }
+        }
+        Write-Host ("  {0,-30} [{1,-4}] {2}" -f $check.Name, "$($check.Status)", $check.Detail) -ForegroundColor $color
+    }
+
+    Write-Host ""
+    Write-Host ("  Result: {0} OK  |  {1} WARN  |  {2} FAIL" -f ($checks.Count - $warnCount - $failCount), $warnCount, $failCount) -ForegroundColor White
+
+    return [int]($failCount -gt 0)
+}
+
+# Function: Export installed tools to a shareable profile file
+function Export-ToolProfile {
+    $profileDir  = Join-Path $PSScriptRoot 'profiles'
+    $profileFile = Join-Path $profileDir 'devops_profile.txt'
+
+    $installed = @()
+    if (Test-Path $CONFIG.StateFile) {
+        try {
+            $state = Get-Content $CONFIG.StateFile | ConvertFrom-Json
+            $installed = @(
+                $state.PSObject.Properties |
+                    Where-Object { $_.Value.status -eq 'installed' } |
+                    ForEach-Object { $_.Name } |
+                    Sort-Object
+            )
+        } catch {
+            Write-Log "Failed to load installation state for export: $_" -Level Error
+            Write-Host "Installation state file is invalid or unreadable." -ForegroundColor Red
+            return 1
+        }
+    }
+
+    if ($installed.Count -eq 0) {
+        Write-Host "No installed tools found in the state file - nothing to export." -ForegroundColor Yellow
+        Write-Host "Run the installer first, then re-run 'devops.ps1 export'." -ForegroundColor Gray
+        return 1
+    }
+
+    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+
+    $lines = @(
+        '# DevOps Tool Installer - tool profile',
+        "# Generated by devops.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+        '#',
+        '# Windows and Linux use different tool identifiers, so a shared profile',
+        '# has one section per platform. Install from this profile with:',
+        "#   Windows: scripts\\install_devops_tools.ps1 -Profile profiles\\devops_profile.txt",
+        "#   Linux:   sudo scripts/install_devops_tools.sh --from profiles/devops_profile.txt",
+        '',
+        '[windows]'
+    )
+    $lines += $installed
+    $lines += ''
+    $lines += '[linux]'
+    $lines += '# Generate this section on a Linux machine with: ./devops.sh export'
+
+    Set-Content -Path $profileFile -Value $lines -Encoding utf8
+    Write-Log "Exported $($installed.Count) installed tools to profile: $profileFile" -Level Success
+    Write-Host ""
+    Write-Host ("Exported {0} tool(s) to: {1}" -f $installed.Count, $profileFile) -ForegroundColor Green
+    Write-Host "Share this file with your team, or re-apply it with the installer's -Profile flag." -ForegroundColor Gray
+    return 0
+}
+
 # Function: Invoke Script
 function Invoke-Script {
     param (
         [string]$relativePath,
-        [string]$scriptType
+        [string]$scriptType,
+        [switch]$UpgradeMode
     )
 
     $scriptPath = Join-Path $PSScriptRoot $relativePath
     if (Test-Path $scriptPath) {
         Write-Log "Launching $scriptType script..." -Level Info
         try {
-            & $scriptPath
+            if ($UpgradeMode) {
+                # Upgrade mode only touches tools the package manager already installed
+                & $scriptPath -All -Upgrade
+            } else {
+                & $scriptPath
+            }
             if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) {
                 Write-Log "$scriptType reported exit code $LASTEXITCODE" -Level Error
             } else {
@@ -589,6 +774,7 @@ Initialize-Logging
 # Non-interactive action dispatch, e.g.: devops.ps1 install
 if ($Action) {
     Write-Log "Running action '$Action'..." -Level Info
+    $actionExit = 0
     switch ($Action) {
         'install'   { Invoke-Script -relativePath $CONFIG.InstallScript   -scriptType 'Installer' }
         'uninstall' { Invoke-Script -relativePath $CONFIG.UninstallScript -scriptType 'Uninstaller' }
@@ -597,9 +783,12 @@ if ($Action) {
         'info'      { Show-SystemInformation }
         'verify'    { Show-ToolVerification }
         'logs'      { Show-RecentLogs }
+        'doctor'    { $actionExit = Invoke-DoctorCheck }
+        'export'    { $actionExit = Export-ToolProfile }
+        'upgrade'   { Invoke-Script -relativePath $CONFIG.InstallScript -scriptType 'Installer (upgrade)' -UpgradeMode }
     }
     Write-Log "Action '$Action' finished" -Level Info
-    exit 0
+    exit $actionExit
 }
 
 if (-not $NoUpdateCheck) {

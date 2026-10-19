@@ -475,6 +475,175 @@ show_system_info() {
     echo ""
 }
 
+# Function: Run environment health checks (read-only; exit code 1 only on hard failures)
+doctor_check() {
+    echo -e "\n${BLUE}🩺 Environment Health Check${RESET}"
+    echo -e "${YELLOW}═════════════════════════════════════════════════════════════${RESET}"
+
+    local fails=0 warns=0
+    _doctor_row() {
+        local status=$1 name=$2 detail=$3
+        local color
+        case "$status" in
+            OK)   color=$GREEN ;;
+            WARN) color=$YELLOW ;;
+            *)    color=$RED ;;
+        esac
+        printf "  %-28s ${color}%-7s${RESET} %s\n" "$name" "[$status]" "$detail"
+    }
+
+    # 1. Operating system
+    local os_name
+    os_name=$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-$(uname -s) $(uname -r)}")
+    _doctor_row "OK" "Operating system" "$os_name"
+
+    # 2. Privileges
+    if [[ $EUID -eq 0 ]]; then
+        _doctor_row "OK" "Privileges" "root"
+    else
+        _doctor_row "WARN" "Privileges" "non-root (install/uninstall/upgrade need sudo)"
+        ((warns++))
+    fi
+
+    # 3. Package manager
+    local pm_found="none"
+    local pm
+    for pm in apt-get dnf yum pacman zypper apk; do
+        if command -v "$pm" >/dev/null 2>&1; then
+            pm_found="$pm"
+            break
+        fi
+    done
+    if [[ "$pm_found" != "none" ]]; then
+        _doctor_row "OK" "Package manager" "$pm_found"
+    else
+        _doctor_row "FAIL" "Package manager" "none found - the installer cannot run"
+        ((fails++))
+    fi
+
+    # 4. Disk space on /
+    local disk_free_gb
+    disk_free_gb=$(( $(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}') / (1024 * 1024) ))
+    if [[ $disk_free_gb -ge 10 ]]; then
+        _doctor_row "OK" "Disk space" "$disk_free_gb GB free on /"
+    elif [[ $disk_free_gb -ge 5 ]]; then
+        _doctor_row "WARN" "Disk space" "$disk_free_gb GB free on /"
+        ((warns++))
+    else
+        _doctor_row "FAIL" "Disk space" "only $disk_free_gb GB free on /"
+        ((fails++))
+    fi
+
+    # 5. Network connectivity
+    if command -v curl >/dev/null 2>&1 && curl -fsSI --max-time 8 https://github.com >/dev/null 2>&1; then
+        _doctor_row "OK" "Network" "internet reachable (github.com)"
+    elif command -v ping >/dev/null 2>&1 && ping -c1 -W4 github.com >/dev/null 2>&1; then
+        _doctor_row "OK" "Network" "internet reachable (github.com)"
+    elif ! command -v curl >/dev/null 2>&1; then
+        _doctor_row "WARN" "Network" "curl not installed - connectivity not tested"
+        ((warns++))
+    else
+        _doctor_row "FAIL" "Network" "no connection to github.com"
+        ((fails++))
+    fi
+
+    # 6. jq / curl availability (update checks and state parsing)
+    if command -v jq >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+        _doctor_row "OK" "Helper tools" "jq and curl available"
+    else
+        local missing_helpers=()
+        command -v jq   >/dev/null 2>&1 || missing_helpers+=("jq")
+        command -v curl >/dev/null 2>&1 || missing_helpers+=("curl")
+        _doctor_row "WARN" "Helper tools" "missing: ${missing_helpers[*]} (state parsing / update checks limited)"
+        ((warns++))
+    fi
+
+    # 7. State file
+    if [[ -f "${CONFIG[STATE_FILE]}" ]]; then
+        if command -v jq >/dev/null 2>&1 && jq empty "${CONFIG[STATE_FILE]}" >/dev/null 2>&1; then
+            local installed_count
+            installed_count=$(jq -r '[.[] | select(.status == "installed")] | length' "${CONFIG[STATE_FILE]}" 2>/dev/null)
+            _doctor_row "OK" "State file" "valid ($installed_count tool(s) recorded as installed)"
+        elif command -v jq >/dev/null 2>&1; then
+            _doctor_row "FAIL" "State file" "corrupt or unreadable"
+            ((fails++))
+        else
+            _doctor_row "WARN" "State file" "present but not validated (jq missing)"
+            ((warns++))
+        fi
+    else
+        _doctor_row "WARN" "State file" "not present yet (run the installer to create it)"
+        ((warns++))
+    fi
+
+    # 8. Log directory writability
+    local log_dir
+    log_dir=$(dirname "${CONFIG[LOG_FILE]}")
+    mkdir -p "$log_dir" 2>/dev/null
+    if touch "$log_dir/.doctor_write_test" 2>/dev/null; then
+        rm -f "$log_dir/.doctor_write_test"
+        _doctor_row "OK" "Log directory" "$log_dir is writable"
+    else
+        _doctor_row "WARN" "Log directory" "not writable - logging may fail here"
+        ((warns++))
+    fi
+
+    echo ""
+    echo -e "  Summary: ${fails} failed, ${warns} warning(s)"
+    if [[ $fails -gt 0 ]]; then
+        echo -e "  ${RED}Result: FAIL - address the issues above before installing.${RESET}"
+        return 1
+    fi
+    echo -e "  ${GREEN}Result: PASS - the environment is ready.${RESET}"
+    return 0
+}
+
+# Function: Export installed tools to a shareable profile file
+export_profile() {
+    local profile_dir="$SCRIPT_DIR/profiles"
+    local profile_file="$profile_dir/devops_profile.txt"
+
+    if [[ ! -f "${CONFIG[STATE_FILE]}" ]]; then
+        echo -e "${YELLOW}No installation state found - nothing to export.${RESET}"
+        echo -e "${GRAY}Run the installer first, then re-run 'devops.sh export'.${RESET}"
+        return 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        log "ERROR" "jq is required to read the state file for export"
+        echo -e "${FAIL} jq is required for profile export. Install it first."
+        return 1
+    fi
+
+    local installed
+    installed=$(jq -r '.[] | select(.status == "installed") | .name' "${CONFIG[STATE_FILE]}" 2>/dev/null | sort -u)
+    if [[ -z "$installed" ]]; then
+        echo -e "${YELLOW}No tools recorded as installed - nothing to export.${RESET}"
+        return 1
+    fi
+
+    mkdir -p "$profile_dir"
+    {
+        echo "# DevOps Tool Installer - tool profile"
+        echo "# Generated by devops.sh on $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "#"
+        echo "# Windows and Linux use different tool identifiers, so a shared profile"
+        echo "# has one section per platform. Install from this profile with:"
+        echo "#   Windows: scripts\\install_devops_tools.ps1 -Profile profiles\\devops_profile.txt"
+        echo "#   Linux:   sudo scripts/install_devops_tools.sh --from profiles/devops_profile.txt"
+        echo ""
+        echo "[linux]"
+        echo "$installed"
+        echo ""
+        echo "[windows]"
+        echo "# Generate this section on Windows with: .\\devops.ps1 export"
+    } > "$profile_file"
+
+    log "SUCCESS" "Exported profile: $profile_file"
+    echo -e "\n${SUCCESS} Exported $(echo "$installed" | wc -l | tr -d ' ') tool(s) to: ${BLUE}$profile_file${RESET}"
+    return 0
+}
+
 # Function: Verify tools recorded in the state file (lightweight re-check)
 verify_installed_tools() {
     echo -e "\n${BLUE}🔍 Installed Tool Verification${RESET}"
@@ -640,6 +809,7 @@ show_installation_status() {
 run_script() {
     local script=$1
     local script_type=$2
+    shift 2
     local timeout_duration=3600  # 1 hour timeout
 
     if [[ ! -f "$script" ]]; then
@@ -657,7 +827,7 @@ run_script() {
     echo -e "${BLUE}Launching $script_type script...${RESET}"
 
     # Direct execution to preserve terminal interaction
-    (exec "$script")
+    (exec "$script" "$@")
     local exit_code=$?
 
     if [ $exit_code -eq 0 ]; then
@@ -701,6 +871,9 @@ usage() {
     echo -e "  ${GREEN}info${RESET}         Show system information"
     echo -e "  ${GREEN}verify${RESET}       Re-check installed tools based on the state file"
     echo -e "  ${GREEN}logs${RESET}         View recent log entries"
+    echo -e "  ${GREEN}doctor${RESET}       Run environment health checks (read-only, CI-friendly exit codes)"
+    echo -e "  ${GREEN}export${RESET}       Save installed tools to a shareable profile file"
+    echo -e "  ${GREEN}upgrade${RESET}      Upgrade every installed tool (root required)"
     echo -e "  ${GREEN}menu${RESET}         Interactive menu (default)"
     echo ""
     echo -e "Options:"
@@ -715,7 +888,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         -s|--skip-update) SKIP_UPDATE=true ;;
-        install|uninstall|update|status|info|verify|logs|menu) ACTION="$1" ;;
+        install|uninstall|update|status|info|verify|logs|doctor|export|upgrade|menu) ACTION="$1" ;;
         *) echo -e "${RED}Unknown option or action: $1${RESET}"; usage; exit 1 ;;
     esac
     shift
@@ -723,7 +896,7 @@ done
 
 # Root privileges are only required for actions that change the system
 if [ "$EUID" -ne 0 ]; then
-    if [[ "$ACTION" == "install" || "$ACTION" == "uninstall" || "$ACTION" == "menu" ]]; then
+    if [[ "$ACTION" == "install" || "$ACTION" == "uninstall" || "$ACTION" == "upgrade" || "$ACTION" == "menu" ]]; then
         echo -e "${RED}Error: action '$ACTION' must be run as root${RESET}"
         echo -e "Please run with: ${GREEN}sudo $0${RESET}"
         exit 1
@@ -780,6 +953,18 @@ case "$ACTION" in
     logs)
         view_recent_logs
         exit 0
+        ;;
+    doctor)
+        doctor_check
+        exit $?
+        ;;
+    export)
+        export_profile
+        exit $?
+        ;;
+    upgrade)
+        run_script "${CONFIG[INSTALL_SCRIPT]}" "Installer (upgrade)" --upgrade -a
+        exit $?
         ;;
 esac
 

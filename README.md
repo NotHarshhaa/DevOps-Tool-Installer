@@ -74,15 +74,15 @@ Every script can now run **non-interactively** — perfect for CI pipelines, con
 
 | Script | Mode / Flags | Purpose |
 |--------|--------------|---------|
-| `devops.ps1` / `devops.sh` | `install` \| `uninstall` \| `update` \| `status` \| `info` \| `verify` \| `logs` | Run any launcher action and exit — no menu |
+| `devops.ps1` / `devops.sh` | `install` \| `uninstall` \| `update` \| `status` \| `info` \| `verify` \| `logs` \| `doctor` \| `export` \| `upgrade` | Run any launcher action and exit — no menu |
 | `devops.ps1` | `-NoUpdateCheck`, `-Yes` | Skip the startup update check / auto-confirm prompts |
 | `devops.sh` | `-s` (`--skip-update`), `-h` (`--help`) | Skip update check / show usage |
-| `install_devops_tools.ps1` | `-List`, `-Install Terraform,Git`, `-All`, `-DryRun`, `-Reinstall`, `-PackageManager winget`, `-SkipRequirements` | Non-interactive installs |
-| `install_devops_tools.sh` | `-l`, `-i "docker,terraform"`, `-a`, `-d` (`--dry-run`), `-s`/`-p`, `-j N`, `-r` (`--retry-failed`), `--skip-requirements` | Non-interactive installs |
+| `install_devops_tools.ps1` | `-List`, `-Install Terraform,Git`, `-All`, `-DryRun`, `-Reinstall`, `-Upgrade`, `-Profile <file>`, `-PackageManager winget`, `-SkipRequirements` | Non-interactive installs |
+| `install_devops_tools.sh` | `-l`, `-i "docker,terraform"`, `-a`, `-d` (`--dry-run`), `-s`/`-p`, `-j N`, `-r` (`--retry-failed`), `-U` (`--upgrade`), `--from <file>`, `--skip-requirements` | Non-interactive installs |
 | `uninstall_devops_tools.ps1` | `-List`, `-Uninstall Docker,Terraform`, `-All`, `-DryRun`, `-Force` | Non-interactive uninstallation |
 | `uninstall_devops_tools.sh` | `-l`, `-u "docker,terraform"`, `-a`, `-d` (`--dry-run`), `-f` (`--force`) | Non-interactive uninstallation |
 
-> 💡 **Privileges**: elevation is only enforced for actions that change the system — read-only actions (`status`, `info`, `verify`, `logs`, `-DryRun`, `-List`) run as a normal user.
+> 💡 **Privileges**: elevation is only enforced for actions that change the system — read-only actions (`status`, `info`, `verify`, `logs`, `doctor`, `export`, `-DryRun`, `-List`) run as a normal user.
 
 ### 🌐 Cross-Platform Compatibility
 - **🐧 Linux Distribution Support** – Ubuntu, Debian, CentOS, RHEL, Fedora, Arch, Alpine, SUSE
@@ -207,10 +207,18 @@ sudo scripts/install_devops_tools.sh -r
 sudo scripts/uninstall_devops_tools.sh -u "docker,terraform" -f
 sudo scripts/uninstall_devops_tools.sh -d -u "docker,terraform"
 
+# Install tools from a shareable profile file (workstation-as-code)
+./devops.sh export                                          # save installed tools to profiles/devops_profile.txt
+sudo scripts/install_devops_tools.sh --from profiles/devops_profile.txt
+
+# Upgrade only the tools that are already installed
+sudo ./devops.sh upgrade
+
 # Launcher one-shot actions
 ./devops.sh status
 ./devops.sh verify
 ./devops.sh logs
+./devops.sh doctor
 ```
 
 #### 📌 Windows examples  
@@ -230,10 +238,18 @@ powershell -File scripts\install_devops_tools.ps1 -Reinstall -Install Git
 powershell -File scripts\uninstall_devops_tools.ps1 -Uninstall Docker,Terraform
 powershell -File scripts\uninstall_devops_tools.ps1 -List
 
+# Export installed tools to a shareable profile, and re-apply it anywhere
+.\devops.ps1 export
+powershell -File scripts\install_devops_tools.ps1 -Profile profiles\devops_profile.txt
+
+# Upgrade only the tools that are already installed
+.\devops.ps1 upgrade
+
 # Launcher one-shot actions
 .\devops.ps1 status
 .\devops.ps1 verify
 .\devops.ps1 logs
+.\devops.ps1 doctor
 ```
 
 Additionally, **interactive tool menus accept multi-select**: enter `3`, a range like `1-5`, a list like `2,4`, or `all` — `l` re-lists the catalog (Windows), and the Linux menus show the same numbering across runs (categories are sorted for stable numbering).
@@ -316,7 +332,7 @@ iwr -useb https://raw.githubusercontent.com/NotHarshhaa/DevOps-Tool-Installer/ma
 7. **View Recent Logs** – tail the manager, installer, and uninstaller logs
 8. **Exit**
 
-Optionally run any of these directly without the menu (`install`, `uninstall`, `update`, `status`, `info`, `verify`, `logs`).
+Optionally run any of these directly without the menu (`install`, `uninstall`, `update`, `status`, `info`, `verify`, `logs`, `doctor`, `export`, `upgrade`).
 
 ---
 
