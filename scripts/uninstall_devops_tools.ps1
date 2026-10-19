@@ -1,17 +1,43 @@
 # uninstall_devops_tools.ps1
 # Enhanced version with better error handling, logging, and state management
 
+param(
+    # Non-interactive uninstall of the given tool name(s)
+    # e.g. -Uninstall 'Terraform','Git'. Flexible matching: 'Docker' matches 'Docker Desktop'.
+    [string[]]$Uninstall = @(),
+
+    # Uninstall every tool detected as installed
+    [switch]$All,
+
+    # List all tools with their installed status, then exit
+    [switch]$List,
+
+    # Do not change anything, only report what would be done
+    [switch]$DryRun,
+
+    # Skip per-tool confirmation prompts (full confirmation still required
+    # in interactive mode)
+    [switch]$Force
+)
+
 # Check for Administrator privileges
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
 $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
+# Check for Administrator privileges
+# Read-only modes (-List, -DryRun) work without elevation; uninstallation
+# itself still requires Administrator.
 if (-not $isAdmin) {
-    Write-Host 'ERROR: This script requires Administrator privileges.' -ForegroundColor Red
-    Write-Host 'Please right-click PowerShell and select "Run as Administrator"' -ForegroundColor Yellow
-    Write-Host 'Current user: ' -ForegroundColor White -NoNewline
-    Write-Host $currentUser.Name -ForegroundColor Gray
-    exit 1
+    if ($List -or $DryRun) {
+        Write-Host 'Warning: running without Administrator privileges, but read-only mode is allowed.' -ForegroundColor Yellow
+    } else {
+        Write-Host 'ERROR: This script requires Administrator privileges.' -ForegroundColor Red
+        Write-Host 'Please right-click PowerShell and select "Run as Administrator"' -ForegroundColor Yellow
+        Write-Host 'Current user: ' -ForegroundColor White -NoNewline
+        Write-Host $currentUser.Name -ForegroundColor Gray
+        exit 1
+    }
 }
 
 # Additional check for elevated privileges
@@ -165,10 +191,11 @@ function Get-InstalledTools {
     foreach ($tool in $packageMap.Keys) {
         $package = $packageMap[$tool]
         try {
-            # --limit-output gives clean "package version" lines with no localized
-            # header/summary lines, making the match reliable across choco versions.
+            # --limit-output gives clean "package|version" lines with no localized
+            # header/summary lines. The line separator differs between output
+            # modes ('pkg version' vs 'pkg|version'), so accept both.
             $listOutput = & choco list --limit-output $package 2>$null
-            $found = $listOutput | Where-Object { $_ -match "^$([regex]::Escape($package))\s" }
+            $found = $listOutput | Where-Object { $_ -match "^$([regex]::Escape($package))(\s|\|)" }
             if ($found) {
                 [void]$installedTools.Add($tool)
                 Write-Log ("Found {0} installed as {1}" -f $tool, $package) -Level Info
@@ -255,7 +282,13 @@ function Update-StateFile {
 
 # Function: Uninstall Tool
 function Uninstall-Tool {
-    param([string]$packageName, [string]$toolName)
+    param([string]$packageName, [string]$toolName, [switch]$DryRun)
+
+    if ($DryRun) {
+        Write-Log ('(DRY RUN) Would uninstall {0} ({1}).' -f $toolName, $packageName) -Level Warning
+        Write-Host ('  [DRY RUN] Would uninstall {0} (package: {1})' -f $toolName, $packageName) -ForegroundColor Yellow
+        return
+    }
 
     try {
         Write-Log ('Uninstalling {0} ({1})...' -f $toolName, $packageName) -Level Info
@@ -264,7 +297,7 @@ function Uninstall-Tool {
         # and works across Chocolatey versions)
         try {
             $listOutput = & choco list --limit-output $packageName 2>$null
-            $found = $listOutput | Where-Object { $_ -match "^$([regex]::Escape($packageName))\s" }
+            $found = $listOutput | Where-Object { $_ -match "^$([regex]::Escape($packageName))(\s|\|)" }
             if (-not $found) {
                 Write-Log ('{0} is not installed.' -f $toolName) -Level Warning
                 Update-StateFile -toolName $toolName -status 'not_installed'
@@ -320,7 +353,12 @@ function Uninstall-Tool {
 # Function: Confirm Uninstallation
 function Confirm-Uninstallation {
     param([string]$toolName)
-    
+
+    if ($Force) {
+        Write-Log ('Forced uninstall: skipping confirmation for {0}.' -f $toolName) -Level Info
+        return $true
+    }
+
     Write-Host ([string]::Empty)
     Write-Host ('Are you sure you want to uninstall {0}?' -f $toolName) -ForegroundColor Yellow
     Write-Host 'This action cannot be undone.' -ForegroundColor Yellow
@@ -335,36 +373,63 @@ function Show-MainMenu {
     $toolList = Show-Tools
 
     do {
-        $selection = Read-Host "`nEnter the number of the tool to uninstall (or 'q' to quit)"
-        
+        $selection = Read-Host "`nEnter tool number(s) - single (3), range (1-5), list (2,4) or 'all installed' - or 'q' to quit"
+
         if ($selection -eq 'q') {
             Write-Log 'Exiting uninstaller...' -Level Info
             break
         }
 
-        if ($selection -match '^\d+$' -and [int]$selection -ge 1 -and [int]$selection -le $toolList.Count) {
-            $toolName = $toolList[[int]$selection - 1]
+        # Build the list of menu indices from the (possibly multi/range) selection
+        $targetIndices = @()
+
+        if ($selection -eq 'all' -or $selection -eq 'a') {
+            # Select every tool currently detected as installed
+            $currentInstalled = Get-InstalledTools
+            for ($i = 0; $i -lt $tools.Count; $i++) {
+                if ($currentInstalled.Contains($tools[$i])) { $targetIndices += ($i + 1) }
+            }
+            if ($targetIndices.Count -eq 0) {
+                Write-Log 'No installed tools detected - nothing to uninstall.' -Level Warning
+                continue
+            }
+        } else {
+            foreach ($token in ($selection -split ',')) {
+                $token = $token.Trim()
+                if ($token -match '^(\d+)-(\d+)$') {
+                    $start = [int]$Matches[1]
+                    $end   = [int]$Matches[2]
+                    if ($start -gt $end) { $tmp = $start; $start = $end; $end = $tmp }
+                    for ($i = $start; $i -le $end; $i++) { $targetIndices += $i }
+                } elseif ($token -match '^\d+$' -and [int]$token -ge 1 -and [int]$token -le $toolList.Count) {
+                    $targetIndices += [int]$token
+                } elseif ($token -ne '') {
+                    Write-Log ('Invalid selection token: {0}' -f $token) -Level Warning
+                }
+            }
+        }
+
+        foreach ($index in ($targetIndices | Select-Object -Unique)) {
+            $toolName = $toolList[$index - 1]
             $package = Get-PackageName -toolName $toolName
 
             if ($null -ne $package) {
                 if (Confirm-Uninstallation -toolName $toolName) {
-                    Uninstall-Tool -packageName $package -toolName $toolName
+                    Uninstall-Tool -packageName $package -toolName $toolName -DryRun:$DryRun
                 } else {
                     Write-Log ('Uninstallation of {0} cancelled by user.' -f $toolName) -Level Info
                 }
             } else {
                 Write-Log ('Package mapping not found for {0}.' -f $toolName) -Level Error
             }
-        } else {
-            Write-Log 'Invalid input. Please enter a valid number from the list.' -Level Warning
         }
-        
+
         Write-Host "`nPress Enter to continue..."
         Read-Host
         Clear-Host
         Show-Header
         $toolList = Show-Tools
-        
+
     } while ($true)
 }
 
@@ -372,11 +437,62 @@ function Show-MainMenu {
 try {
     Initialize-Logging
     Write-Log 'Starting DevOps Tool Uninstaller...' -Level Info
-    
+
     if (-not (Test-Prerequisites)) {
         exit 1
     }
-    
+
+    # -List mode: show the catalog with installed status, then exit
+    if ($List) {
+        if ($DryRun) { Write-Log 'Dry run mode enabled - no changes will be made' -Level Warning }
+        $null = Show-Tools
+        return
+    }
+
+    # Normalize -Uninstall into a flat list (values may arrive as an array or
+    # as a single comma-separated string depending on how the script is invoked)
+    $RequestedTools = @()
+    foreach ($item in $Uninstall) {
+        $RequestedTools += ($item -split ',') | ForEach-Object { ('{0}' -f $_).Trim() } | Where-Object { $_ }
+    }
+
+    # Non-interactive mode: -Uninstall <names> or -All
+    if ($RequestedTools.Count -gt 0 -or $All) {
+        if ($DryRun) { Write-Log 'Dry run mode enabled - no changes will be made' -Level Warning }
+
+        $packageMap = Get-PackageMap
+        $targets    = @()
+
+        if ($All) {
+            $targets = @(Get-InstalledTools)
+            if ($targets.Count -eq 0) {
+                Write-Log 'No installed tools detected - nothing to uninstall.' -Level Warning
+                return
+            }
+            Write-Log ('Uninstalling all {0} detected tool(s).' -f $targets.Count) -Level Info
+        } else {
+            foreach ($requested in $RequestedTools) {
+                $match = $packageMap.Keys |
+                    Where-Object { $_ -eq $requested -or $_ -like "*$requested*" } |
+                    Select-Object -First 1
+                if ($match) {
+                    if ($targets -notcontains $match) { $targets += $match }
+                    Write-Log "Matched '$requested' -> $match" -Level Info
+                } else {
+                    Write-Log "Requested tool '$requested' not found. Use -List to show available tools." -Level Error
+                    exit 1
+                }
+            }
+        }
+
+        foreach ($toolName in $targets) {
+            Uninstall-Tool -packageName $packageMap[$toolName] -toolName $toolName -DryRun:$DryRun
+        }
+
+        Write-Log 'Non-interactive uninstallation finished.' -Level Success
+        return
+    }
+
     Show-MainMenu
     Write-Log 'DevOps Tool Uninstaller completed successfully.' -Level Success
 }

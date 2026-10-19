@@ -585,11 +585,45 @@ shutdown() {
 # Handle interrupts gracefully
 trap shutdown SIGINT SIGTERM
 
-# Check if running as root
+# Function: Show usage help
+usage() {
+    echo -e "${CYAN}Usage: $0 [action] [options]${RESET}"
+    echo ""
+    echo -e "Actions (the interactive menu is the default):"
+    echo -e "  ${GREEN}install${RESET}      Launch the DevOps tool installer"
+    echo -e "  ${GREEN}uninstall${RESET}    Launch the DevOps tool uninstaller"
+    echo -e "  ${GREEN}update${RESET}       Check for updates"
+    echo -e "  ${GREEN}status${RESET}       Show installation status"
+    echo -e "  ${GREEN}info${RESET}         Show system information"
+    echo -e "  ${GREEN}menu${RESET}         Interactive menu (default)"
+    echo ""
+    echo -e "Options:"
+    echo -e "  ${YELLOW}-s, --skip-update${RESET}   Skip the update check at startup"
+    echo -e "  ${YELLOW}-h, --help${RESET}          Show this help message"
+}
+
+# Parse command line arguments
+ACTION="menu"
+SKIP_UPDATE=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -s|--skip-update) SKIP_UPDATE=true ;;
+        install|uninstall|update|status|info|menu) ACTION="$1" ;;
+        *) echo -e "${RED}Unknown option or action: $1${RESET}"; usage; exit 1 ;;
+    esac
+    shift
+done
+
+# Root privileges are only required for actions that change the system
 if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Error: This script must be run as root${RESET}"
-    echo -e "Please run with: ${GREEN}sudo $0${RESET}"
-    exit 1
+    if [[ "$ACTION" == "install" || "$ACTION" == "uninstall" || "$ACTION" == "menu" ]]; then
+        echo -e "${RED}Error: action '$ACTION' must be run as root${RESET}"
+        echo -e "Please run with: ${GREEN}sudo $0${RESET}"
+        exit 1
+    else
+        echo -e "${YELLOW}Warning: running as non-root. Some features may require elevated privileges.${RESET}"
+    fi
 fi
 
 # Make sure scripts are executable
@@ -610,8 +644,37 @@ cd "$SCRIPT_DIR" || {
 create_required_dirs
 init_logging
 init_state_file
-check_requirements
-check_updates
+
+# Single-shot actions: run and exit (no interactive prompts)
+case "$ACTION" in
+    install)
+        run_script "${CONFIG[INSTALL_SCRIPT]}" "Installer"
+        exit $?
+        ;;
+    uninstall)
+        run_script "${CONFIG[UNINSTALL_SCRIPT]}" "Uninstaller"
+        exit $?
+        ;;
+    update)
+        check_updates || true
+        exit 0
+        ;;
+    status)
+        show_installation_status
+        exit 0
+        ;;
+    info)
+        show_system_info
+        exit 0
+        ;;
+esac
+
+# Interactive menu mode: pre-flight checks (skipped when piping/output-redir
+# because these can wait for interactive input)
+if [[ "$SKIP_UPDATE" != true && -t 0 ]]; then
+    check_requirements
+    check_updates
+fi
 
 while true; do
     show_banner
@@ -634,42 +697,14 @@ while true; do
     # Execute choice
     case "$choice" in
         1)
-            # Execute the script directly with terminal interaction
-            if [[ -x "${CONFIG[INSTALL_SCRIPT]}" ]]; then
-                (exec "${CONFIG[INSTALL_SCRIPT]}")
-                status=$?
-                if [ $status -ne 0 ]; then
-                    log "ERROR" "Installation failed with exit code $status. Check the logs for details."
-                    echo -e "${RED}Installation failed with exit code $status. Check the logs for details.${RESET}"
-                fi
-            else
-                log "ERROR" "Installer script not executable: ${CONFIG[INSTALL_SCRIPT]}"
-                echo -e "${RED}Installer script not executable: ${CONFIG[INSTALL_SCRIPT]}${RESET}"
-                chmod +x "${CONFIG[INSTALL_SCRIPT]}" 2>/dev/null
-                if [ $? -eq 0 ]; then
-                    # Try again with executable permission
-                    (exec "${CONFIG[INSTALL_SCRIPT]}")
-                fi
+            if ! run_script "${CONFIG[INSTALL_SCRIPT]}" "Installer"; then
+                log "ERROR" "Installation script exited with an error. Check the logs for details."
             fi
             wait_for_keypress
             ;;
         2)
-            # Execute the script directly with terminal interaction
-            if [[ -x "${CONFIG[UNINSTALL_SCRIPT]}" ]]; then
-                (exec "${CONFIG[UNINSTALL_SCRIPT]}")
-                status=$?
-                if [ $status -ne 0 ]; then
-                    log "ERROR" "Uninstallation failed with exit code $status. Check the logs for details."
-                    echo -e "${RED}Uninstallation failed with exit code $status. Check the logs for details.${RESET}"
-                fi
-            else
-                log "ERROR" "Uninstaller script not executable: ${CONFIG[UNINSTALL_SCRIPT]}"
-                echo -e "${RED}Uninstaller script not executable: ${CONFIG[UNINSTALL_SCRIPT]}${RESET}"
-                chmod +x "${CONFIG[UNINSTALL_SCRIPT]}" 2>/dev/null
-                if [ $? -eq 0 ]; then
-                    # Try again with executable permission
-                    (exec "${CONFIG[UNINSTALL_SCRIPT]}")
-                fi
+            if ! run_script "${CONFIG[UNINSTALL_SCRIPT]}" "Uninstaller"; then
+                log "ERROR" "Uninstallation script exited with an error. Check the logs for details."
             fi
             wait_for_keypress
             ;;

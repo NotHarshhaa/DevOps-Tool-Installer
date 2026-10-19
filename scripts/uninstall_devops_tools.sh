@@ -13,6 +13,7 @@ declare -A CONFIG=(
     ["LOG_FILE"]="$ROOT_DIR/logs/uninstall/uninstall_$(date +%Y%m%d_%H%M%S).log"
     ["STATE_FILE"]="$ROOT_DIR/state/devops_state.json"
     ["DRY_RUN"]=false
+    ["FORCE"]=false
     ["MAX_LOG_DIRS"]=10
     ["VERSION"]="3.5.0"
 )
@@ -119,6 +120,39 @@ update_state() {
     mv "${CONFIG[STATE_FILE]}.tmp" "${CONFIG[STATE_FILE]}"
 
     log "INFO" "Updated state file: removed $tool"
+}
+
+# Print the tool catalog with installed status (used by -l/--list)
+list_tools_status() {
+    echo -e "\n${YELLOW}🔧 Installed DevOps tools:${RESET}\n"
+    local sorted_categories=()
+    mapfile -t sorted_categories < <(printf '%s\n' "${!TOOL_CATEGORIES[@]}" | sort)
+    for category in "${sorted_categories[@]}"; do
+        echo -e "${CYAN}[$category]${RESET}"
+        for tool in ${TOOL_CATEGORIES[$category]}; do
+            local installed="No"
+            if bash -c "${VERIFY_CMDS[$tool]}" >/dev/null 2>&1; then
+                installed="${GREEN}Yes${RESET}"
+            fi
+            printf "  ${GREEN}%-22s${RESET} Installed: %s\n" "$tool" "$installed"
+        done
+    done
+    echo ""
+}
+
+# Usage help for command line uninstall mode
+usage_uninstall_sh() {
+    echo -e "${CYAN}Usage: $0 [options]${RESET}"
+    echo ""
+    echo -e "Options:"
+    echo -e "  ${GREEN}-l, --list${RESET}            List tools and installed status, then exit"
+    echo -e "  ${GREEN}-u, --uninstall LIST${RESET}  Comma/space separated tools to uninstall (non-interactive)"
+    echo -e "  ${GREEN}-a, --all${RESET}             Uninstall every tool detected as installed (non-interactive)"
+    echo -e "  ${GREEN}-d, --dry-run${RESET}         Show what would be removed without changing anything"
+    echo -e "  ${GREEN}-f, --force${RESET}           Do not prompt (also skips 'tool in use' warnings)"
+    echo -e "  ${YELLOW}-h, --help${RESET}            Show this help message"
+    echo ""
+    echo -e "  ${YELLOW}--dry-run${RESET}             (kept for backwards compatibility - same as -d)"
 }
 
 # Detect OS and package manager
@@ -355,17 +389,34 @@ cli_tool_prompt() {
         echo "${all_tools[0]}"
         return 0
     else
-        # Convert numbers to tool names
+        # Convert numbers (with range support) to tool names
         local tools=""
         IFS=',' read -ra selected_numbers <<< "$selection"
 
         for num in "${selected_numbers[@]}"; do
             num=$(echo "$num" | tr -d '[:space:]')
-            local idx=$((num - 1))
-            if [[ "$idx" -ge 0 && "$idx" -lt "${#all_tools[@]}" ]]; then
-                tools+="${all_tools[$idx]} "
+            if [[ "$num" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+                # Range like 1-5
+                local r_start=$((BASH_REMATCH[1]))
+                local r_end=$((BASH_REMATCH[2]))
+                if (( r_start > r_end )); then
+                    local tmp=$r_start; r_start=$r_end; r_end=$tmp
+                fi
+                for ((r = r_start; r <= r_end; r++)); do
+                    local idx=$((r - 1))
+                    if [[ "$idx" -ge 0 && "$idx" -lt "${#all_tools[@]}" ]]; then
+                        tools+="${all_tools[$idx]} "
+                    else
+                        printf "${RED}Invalid selection: $r. Skipping.${RESET}\n" > /dev/tty
+                    fi
+                done
             else
-                printf "${RED}Invalid selection: $num. Skipping.${RESET}\n" > /dev/tty
+                local idx=$((num - 1))
+                if [[ "$num" =~ ^[0-9]+$ && "$idx" -ge 0 && "$idx" -lt "${#all_tools[@]}" ]]; then
+                    tools+="${all_tools[$idx]} "
+                else
+                    printf "${RED}Invalid selection: $num. Skipping.${RESET}\n" > /dev/tty
+                fi
             fi
         done
 
@@ -432,8 +483,8 @@ uninstall_tool() {
         return 1
     fi
 
-    # Check if tool is in use (only if not in dry run mode)
-    if [[ "${CONFIG[DRY_RUN]}" != true ]] && check_if_in_use "$tool"; then
+    # Check if tool is in use (skipped in dry-run or forced mode)
+    if [[ "${CONFIG[DRY_RUN]}" != true && "${CONFIG[FORCE]}" != true ]] && check_if_in_use "$tool"; then
         log "WARN" "$tool appears to be in use. This may cause issues."
         echo -e "${WARN} $tool appears to be in use. This may cause issues."
         echo -e "${YELLOW}Do you want to continue anyway? (y/n):${RESET}"
@@ -514,9 +565,25 @@ main() {
         exit 1
     }
 
-    # Check for dry run flag
-    if [[ "$1" == "--dry-run" ]]; then
-        CONFIG[DRY_RUN]=true
+    # ---- Command line arguments ----
+    local CLI_MODE=false LIST_ONLY=false INSTALL_LIST=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) usage_uninstall_sh; exit 0 ;;
+            -l|--list) LIST_ONLY=true; CLI_MODE=true ;;
+            -d|--dry-run) CONFIG[DRY_RUN]=true ;;
+            --dry-run) CONFIG[DRY_RUN]=true ;; # backwards compatibility
+            -f|--force) CONFIG[FORCE]=true ;;
+            -u|--uninstall) INSTALL_LIST="${2:-}"; CLI_MODE=true; shift ;;
+            -a|--all) INSTALL_LIST="ALL"; CLI_MODE=true ;;
+            *) echo -e "${RED}Unknown option: $1${RESET}"; usage_uninstall_sh; exit 1 ;;
+        esac
+        shift
+    done
+
+    if [[ "${CONFIG[DRY_RUN]}" == true ]]; then
+        log "INFO" "Dry run mode enabled - no changes will be made"
     fi
 
     # Initialize
@@ -526,36 +593,74 @@ main() {
     detect_os
     show_banner
 
-    # Get tool selection
-    echo -e "${CYAN}Loading tool selection menu...${RESET}"
-    local selected_tools=$(cli_tool_prompt)
+    # List-only mode: print catalog with installed status, then exit
+    if [[ "$LIST_ONLY" == true ]]; then
+        list_tools_status
+        exit 0
+    fi
 
-    if [[ -z "$selected_tools" ]]; then
+    # ---- Tool selection ----
+    local tools_input=""
+
+    # Build the full tool list in a stable (sorted) order
+    local sorted_categories=()
+    mapfile -t sorted_categories < <(printf '%s\n' "${!TOOL_CATEGORIES[@]}" | sort)
+    local all_names=""
+    for category in "${sorted_categories[@]}"; do
+        all_names+=" ${TOOL_CATEGORIES[$category]}"
+    done
+
+    if [[ -n "$INSTALL_LIST" ]]; then
+        if [[ "$INSTALL_LIST" == "ALL" ]]; then
+            # Non-interactive: select every tool detected as installed
+            for tool in $all_names; do
+                if bash -c "${VERIFY_CMDS[$tool]}" >/dev/null 2>&1; then
+                    tools_input+="$tool "
+                fi
+            done
+            if [[ -z "$tools_input" ]]; then
+                log "INFO" "No installed tools found - nothing to uninstall"
+                echo -e "${WARN} No installed tools found on this system."
+                exit 0
+            fi
+        else
+            tools_input="${INSTALL_LIST//,/ }"
+        fi
+    else
+        # Get tool selection interactively
+        echo -e "${CYAN}Loading tool selection menu...${RESET}"
+        tools_input=$(cli_tool_prompt)
+    fi
+
+    if [[ -z "$tools_input" ]]; then
         log "ERROR" "No tools selected for uninstallation"
         echo -e "${RED}No tools selected for uninstallation.${RESET}"
         exit 1
     fi
 
     # Count selected tools
-    read -ra tools_array <<< "$selected_tools"
+    read -ra tools_array <<< "$tools_input"
     local tool_count=${#tools_array[@]}
 
-    log "INFO" "Selected $tool_count tools for uninstallation: $selected_tools"
+    log "INFO" "Selected $tool_count tools for uninstallation: $tools_input"
     echo -e "${INFO} Selected ${BLUE}$tool_count${RESET} tools for uninstallation"
 
-    if [[ "${CONFIG[DRY_RUN]}" == true ]]; then
-        echo -e "${PURPLE}DRY RUN MODE: No changes will actually be made${RESET}"
-        echo -e "${YELLOW}Continue with dry run? (y/n):${RESET}"
-    else
-        echo -e "${RED}WARNING: This will uninstall the selected tools and remove their data${RESET}"
-        echo -e "${YELLOW}Continue? (y/n):${RESET}"
-    fi
-    read -r confirm
+    # Confirmation (skipped in non-interactive CLI mode or forced runs)
+    if [[ "$CLI_MODE" != true ]]; then
+        if [[ "${CONFIG[DRY_RUN]}" == true ]]; then
+            echo -e "${PURPLE}DRY RUN MODE: No changes will actually be made${RESET}"
+            echo -e "${YELLOW}Continue with dry run? (y/n):${RESET}"
+        else
+            echo -e "${RED}WARNING: This will uninstall the selected tools and remove their data${RESET}"
+            echo -e "${YELLOW}Continue? (y/n):${RESET}"
+        fi
+        read -r confirm
 
-    if [[ "$confirm" != "y" ]]; then
-        log "INFO" "Uninstallation aborted by user"
-        echo -e "${INFO} Uninstallation aborted."
-        exit 0
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            log "INFO" "Uninstallation aborted by user"
+            echo -e "${INFO} Uninstallation aborted."
+            exit 0
+        fi
     fi
 
     # Track success and failure

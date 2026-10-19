@@ -158,6 +158,52 @@ update_state() {
     fi
 }
 
+# Remove old installer logs so they don't grow forever
+cleanup_old_logs() {
+    local log_dir
+    log_dir=$(dirname "${CONFIG[LOG_FILE]}")
+
+    # Keep only the newest 5 root-level run logs
+    find "$log_dir" -maxdepth 1 -name 'install_*.log' 2>/dev/null | sort | tail -n +6 | xargs -r rm -f 2>/dev/null
+
+    # Per-tool subdirectories - keep the newest 5 logs per tool
+    find "$log_dir" -mindepth 2 -type d 2>/dev/null | while read -r tool_log_dir; do
+        find "$tool_log_dir" -maxdepth 1 -name 'install_*.log' 2>/dev/null | sort | tail -n +6 | xargs -r rm -f 2>/dev/null
+    done
+}
+
+# Print the tool catalog in a stable order (used by -l/--list)
+list_tool_catalog() {
+    echo -e "\n${YELLOW}🔧 Available Tools:${RESET}\n"
+    local idx=1
+    local sorted_categories=()
+    mapfile -t sorted_categories < <(printf '%s\n' "${!TOOL_CATEGORIES[@]}" | sort)
+    for category in "${sorted_categories[@]}"; do
+        echo -e "${CYAN}[$category]${RESET}"
+        for tool in ${TOOL_CATEGORIES[$category]}; do
+            printf "  [${GREEN}%2d${RESET}] %s\n" "$idx" "$tool"
+            ((idx++))
+        done
+    done
+    echo ""
+}
+
+# Usage help for command line install mode
+usage_install_sh() {
+    echo -e "${CYAN}Usage: $0 [options]${RESET}"
+    echo ""
+    echo -e "Options:"
+    echo -e "  ${GREEN}-l, --list${RESET}              List available tools and exit"
+    echo -e "  ${GREEN}-i, --install LIST${RESET}      Comma/space separated tools to install (non-interactive)"
+    echo -e "  ${GREEN}-a, --all${RESET}               Install every tool in the catalog (non-interactive)"
+    echo -e "  ${GREEN}-s, --sequential${RESET}        Force sequential installation"
+    echo -e "  ${GREEN}-p, --parallel${RESET}          Force parallel installation (default for multiple tools)"
+    echo -e "  ${GREEN}-j, --jobs N${RESET}            Max parallel jobs (default ${CONFIG[MAX_PARALLEL_JOBS]})"
+    echo -e "  ${GREEN}-d, --dry-run${RESET}           Show what would be installed without changing anything"
+    echo -e "  ${GREEN}    --skip-requirements${RESET} Skip the interactive system requirements check"
+    echo -e "  ${YELLOW}-h, --help${RESET}              Show this help message"
+}
+
 # Detect OS and package manager
 detect_os() {
     if [[ -f /etc/os-release ]]; then
@@ -371,6 +417,14 @@ install_tool() {
         log "SUCCESS" "$tool is already installed (version: $version)"
         echo -e "${SUCCESS} $tool is already installed (version: ${GREEN}$version${RESET})"
         update_state "$tool" "installed" "$version"
+        return 0
+    fi
+
+    # Dry run: report the plan without changing anything
+    if [[ "${CONFIG[DRY_RUN]}" == "true" ]]; then
+        log "INFO" "[DRY RUN] $tool would be installed with the following commands:"
+        echo -e "${WARN} [DRY RUN] $tool would be installed with the following commands:"
+        echo -e "  ${YELLOW}${INSTALL_CMDS[$tool]}${RESET}"
         return 0
     fi
 
@@ -612,17 +666,34 @@ cli_tool_prompt() {
         return 0
     fi
 
-    # Convert numbers to tool names
+    # Convert numbers (with range support) to tool names
     local tools=""
     IFS=',' read -ra selected_numbers <<< "$selection"
 
     for num in "${selected_numbers[@]}"; do
         num=$(echo "$num" | tr -d '[:space:]')
-        local idx=$((num - 1))
-        if [[ "$idx" -ge 0 && "$idx" -lt "${#all_tools[@]}" ]]; then
-            tools+="${all_tools[$idx]} "
+        if [[ "$num" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            # Range like 1-5
+            local r_start=$((BASH_REMATCH[1]))
+            local r_end=$((BASH_REMATCH[2]))
+            if (( r_start > r_end )); then
+                local tmp=$r_start; r_start=$r_end; r_end=$tmp
+            fi
+            for ((r = r_start; r <= r_end; r++)); do
+                local idx=$((r - 1))
+                if [[ "$idx" -ge 0 && "$idx" -lt "${#all_tools[@]}" ]]; then
+                    tools+="${all_tools[$idx]} "
+                else
+                    printf "${RED}Invalid selection: $r. Skipping.${RESET}\n" > /dev/tty
+                fi
+            done
         else
-            printf "${RED}Invalid selection: $num. Skipping.${RESET}\n" > /dev/tty
+            local idx=$((num - 1))
+            if [[ "$num" =~ ^[0-9]+$ && "$idx" -ge 0 && "$idx" -lt "${#all_tools[@]}" ]]; then
+                tools+="${all_tools[$idx]} "
+            else
+                printf "${RED}Invalid selection: $num. Skipping.${RESET}\n" > /dev/tty
+            fi
         fi
     done
 
@@ -712,6 +783,15 @@ install_parallel() {
                 log "SUCCESS" "$tool is already installed (version: $version)"
                 echo -e "${SUCCESS} $tool is already installed (version: ${GREEN}$version${RESET})"
                 update_state "$tool" "installed" "$version"
+                ((success++))
+                continue
+            fi
+
+            # Dry run: report the plan without changing anything
+            if [[ "${CONFIG[DRY_RUN]}" == "true" ]]; then
+                log "INFO" "[DRY RUN] $tool would be installed with the following commands:"
+                echo -e "${WARN} [DRY RUN] $tool would be installed with the following commands:"
+                echo -e "  ${YELLOW}${INSTALL_CMDS[$tool]}${RESET}"
                 ((success++))
                 continue
             fi
@@ -833,64 +913,130 @@ main() {
         exit 1
     }
 
+    # ---- Command line arguments (non-interactive automation support) ----
+    local CLI_MODE=false LIST_ONLY=false ALL_MODE=false DRY_RUN=false SKIP_REQUIREMENTS=false
+    local INSTALL_LIST=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) usage_install_sh; exit 0 ;;
+            -l|--list) LIST_ONLY=true ;;
+            -i|--install) INSTALL_LIST="${2:-}"; CLI_MODE=true; shift ;;
+            -a|--all) ALL_MODE=true; CLI_MODE=true ;;
+            -s|--sequential) CONFIG[PARALLEL_INSTALL]=false ;;
+            -p|--parallel) CONFIG[PARALLEL_INSTALL]=true ;;
+            -j|--jobs) CONFIG[MAX_PARALLEL_JOBS]="${2:-4}"; shift ;;
+            -d|--dry-run) DRY_RUN=true ;;
+            --skip-requirements) SKIP_REQUIREMENTS=true ;;
+            *) echo -e "${RED}Unknown option: $1${RESET}"; usage_install_sh; exit 1 ;;
+        esac
+        shift
+    done
+
+    if [[ "$DRY_RUN" == true ]]; then
+        CONFIG["DRY_RUN"]="true"
+        log "INFO" "Dry run mode enabled - no changes will be made"
+    fi
+
     show_banner
     create_required_dirs
     init_state_file
+    cleanup_old_logs
     detect_os
 
-    # Check system requirements if enabled
-    if [[ "${CONFIG[CHECK_SYSTEM_REQUIREMENTS]}" == "true" ]]; then
-        check_system_requirements
+    # The requirements check can prompt - skip it in CLI mode (or on request).
+    # Dry-run mode skips all system changes entirely.
+    if [[ "$DRY_RUN" == true ]]; then
+        log "INFO" "Skipping requirements and repository setup in dry-run mode"
+    else
+        if [[ "${CONFIG[CHECK_SYSTEM_REQUIREMENTS]}" == "true" && "$CLI_MODE" != true && "$SKIP_REQUIREMENTS" != true ]]; then
+            check_system_requirements
+        fi
+
+        # Update package repositories
+        update_package_repositories
+
+        # Install base requirements
+        install_base_requirements
     fi
 
-    # Update package repositories
-    update_package_repositories
+    # ---- Tool selection ----
+    local tools_input=""
 
-    # Install base requirements
-    install_base_requirements
+    if [[ "$LIST_ONLY" == true ]]; then
+        list_tool_catalog
+        exit 0
+    fi
 
-    # Get tool selection
-    echo -e "${CYAN}Loading tool selection menu...${RESET}"
-    # No stdout redirection - keep it simple
-    local selected_tools=$(cli_tool_prompt)
+    if [[ "$ALL_MODE" == true ]]; then
+        # Install every tool in the catalog
+        local sorted_categories=()
+        mapfile -t sorted_categories < <(printf '%s\n' "${!TOOL_CATEGORIES[@]}" | sort)
+        for category in "${sorted_categories[@]}"; do
+            tools_input+=" ${TOOL_CATEGORIES[$category]}"
+        done
+    elif [[ -n "$INSTALL_LIST" ]]; then
+        tools_input="${INSTALL_LIST//,/ }"
+    else
+        # Get tool selection interactively
+        echo -e "${CYAN}Loading tool selection menu...${RESET}"
+        # No stdout redirection - keep it simple
+        tools_input=$(cli_tool_prompt)
+    fi
 
-    if [[ -z "$selected_tools" ]]; then
+    if [[ -z "$tools_input" ]]; then
         log "ERROR" "No tools selected for installation"
         echo -e "${RED}No tools selected for installation.${RESET}"
         exit 1
     fi
 
-    # Count selected tools
-    read -ra tools_array <<< "$selected_tools"
+    # Count and validate selected tools
+    read -ra tools_array <<< "$tools_input"
     local tool_count=${#tools_array[@]}
 
-    log "INFO" "Selected $tool_count tools for installation: $selected_tools"
+    for tool in "${tools_array[@]}"; do
+        if [[ -z "${INSTALL_CMDS[$tool]}" ]]; then
+            log "ERROR" "Unknown tool '$tool'. Use -l/--list to see available tools."
+            echo -e "${FAIL} Unknown tool '$tool'. Use -l/--list to see available tools."
+            exit 1
+        fi
+    done
+
+    log "INFO" "Selected $tool_count tools for installation: $tools_input"
     echo -e "${INFO} Selected ${BLUE}$tool_count${RESET} tools for installation"
 
-    # Confirm installation
-    echo -e "${YELLOW}Do you want to proceed with installation? (y/n):${RESET}"
-    read -rp "👉 " confirm
-    if [[ "$confirm" != "y" ]]; then
-        log "INFO" "Installation aborted by user"
-        echo -e "${INFO} Installation aborted."
-        exit 0
-    fi
-
-    # Create log directories if they don't exist
-    mkdir -p "${CONFIG[LOG_DIR]}"
-
-    # Ask about installation mode if more than one tool
-    if [[ $tool_count -gt 1 ]]; then
-        echo -e "${YELLOW}Installation mode:${RESET}"
-        echo -e "  ${GREEN}[1] Parallel${RESET} (faster, but harder to troubleshoot)"
-        echo -e "  ${GREEN}[2] Sequential${RESET} (slower, but easier to troubleshoot)"
-        read -rp "👉 Enter your choice [1]: " install_mode
-
-        if [[ "$install_mode" == "2" ]]; then
-            CONFIG[PARALLEL_INSTALL]=false
-        else
-            CONFIG[PARALLEL_INSTALL]=true
+    # Confirm installation (interactive mode only)
+    if [[ "$CLI_MODE" != true ]]; then
+        echo -e "${YELLOW}Do you want to proceed with installation? (y/n):${RESET}"
+        read -rp "👉 " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            log "INFO" "Installation aborted by user"
+            echo -e "${INFO} Installation aborted."
+            exit 0
         fi
+
+        # Create log directories if they don't exist
+        mkdir -p "${CONFIG[LOG_DIR]}"
+
+        # Ask about installation mode if more than one tool
+        if [[ $tool_count -gt 1 ]]; then
+            echo -e "${YELLOW}Installation mode:${RESET}"
+            echo -e "  ${GREEN}[1] Parallel${RESET} (faster, but harder to troubleshoot)"
+            echo -e "  ${GREEN}[2] Sequential${RESET} (slower, but easier to troubleshoot)"
+            read -rp "👉 Enter your choice [1]: " install_mode
+
+            if [[ "$install_mode" == "2" ]]; then
+                CONFIG[PARALLEL_INSTALL]=false
+            else
+                CONFIG[PARALLEL_INSTALL]=true
+            fi
+        fi
+    else
+        # CLI mode: single tool installs are sequential, multiple go parallel
+        if [[ $tool_count -eq 1 ]]; then
+            CONFIG[PARALLEL_INSTALL]=false
+        fi
+        mkdir -p "${CONFIG[LOG_DIR]}"
     fi
 
     # Install tools based on parallel flag

@@ -1,9 +1,26 @@
 # devops.ps1 - DevOps Tool Manager by ProDevOpsGuy
 
+param(
+    # Run a single action non-interactively and exit:
+    #   install | uninstall | update | status | info
+    # If omitted, the interactive menu is shown.
+    [Parameter(Position = 0)]
+    [ValidateSet('', 'install', 'uninstall', 'update', 'status', 'info')]
+    [string]$Action = '',
+
+    # Skip the automatic update check at startup
+    [switch]$NoUpdateCheck,
+
+    # Auto-confirm update prompts (e.g. accept an available update without asking)
+    [switch]$Yes
+)
+
 # Check for Administrator privileges
+# Only system-changing actions require elevation; read-only actions (status,
+# info, update) can run as a normal user.
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Host "This script requires Administrator privileges. Please run PowerShell as Administrator." -ForegroundColor Red
+if (-not $isAdmin -and ($Action -eq '' -or $Action -in 'install', 'uninstall')) {
+    Write-Host "This action requires Administrator privileges. Please run PowerShell as Administrator." -ForegroundColor Red
     exit 1
 }
 
@@ -19,9 +36,14 @@ $CONFIG = @{
     ConfigDir        = Join-Path $PSScriptRoot "config"
 }
 
-# Function: Initialize logging
+# Function: Initialize logging (with rotation when the log grows large)
 function Initialize-Logging {
-    if (-not (Test-Path $CONFIG.LogFile)) {
+    if (Test-Path $CONFIG.LogFile) {
+        # Rotate the log file when it grows beyond 10 MB
+        if ((Get-Item $CONFIG.LogFile -ErrorAction SilentlyContinue).Length -gt 10MB) {
+            Move-Item -Path $CONFIG.LogFile -Destination ('{0}.bak' -f $CONFIG.LogFile) -Force
+        }
+    } else {
         New-Item -Path $CONFIG.LogFile -ItemType File -Force | Out-Null
     }
 }
@@ -73,6 +95,8 @@ function Write-Log {
 
 # Function: Check for Updates
 function Test-Updates {
+    param([switch]$AutoConfirm)
+
     try {
         Write-Log "Checking for updates..." -Level Info
 
@@ -91,7 +115,10 @@ function Test-Updates {
 
         if ($parsedLatest -ne $null -and $parsedCurrent -ne $null -and $parsedLatest -gt $parsedCurrent) {
             Write-Log "New version available: v$latestVersion" -Level Warning
-            $choice = Read-Host "Would you like to update? (y/n)"
+            $choice = 'y'
+            if (-not $AutoConfirm) {
+                $choice = Read-Host "Would you like to update? (y/n)"
+            }
             if ($choice -match '^[Yy]$') {
                 Update-Script -Version $latestVersion
             }
@@ -446,7 +473,24 @@ function Invoke-Script {
 
 # Main Program
 Initialize-Logging
-Test-Updates
+
+# Non-interactive action dispatch, e.g.: devops.ps1 install
+if ($Action) {
+    Write-Log "Running action '$Action'..." -Level Info
+    switch ($Action) {
+        'install'   { Invoke-Script -relativePath $CONFIG.InstallScript   -scriptType 'Installer' }
+        'uninstall' { Invoke-Script -relativePath $CONFIG.UninstallScript -scriptType 'Uninstaller' }
+        'update'    { Test-Updates -AutoConfirm:$Yes }
+        'status'    { Show-InstallationStatus }
+        'info'      { Show-SystemInformation }
+    }
+    Write-Log "Action '$Action' finished" -Level Info
+    exit 0
+}
+
+if (-not $NoUpdateCheck) {
+    Test-Updates -AutoConfirm:$Yes
+}
 
 do {
     Show-Banner

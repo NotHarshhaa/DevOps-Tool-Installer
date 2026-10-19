@@ -1,6 +1,28 @@
 # install_devops_tools.ps1 - DevOps Tool Installer by ProDevOpsGuy Tech
 # Version 3.5.0
 
+param(
+    # List available tools and exit
+    [switch]$List,
+
+    # Non-interactive install of the given tool(s).
+    # Accepts tool names or package ids, e.g. -Install 'Terraform','Git'
+    [string[]]$Install = @(),
+
+    # Non-interactive install of every tool in the catalog
+    [switch]$All,
+
+    # Override the package manager for this run (choco | winget)
+    [ValidateSet('choco', 'winget')]
+    [string]$PackageManager = '',
+
+    # Show what would be installed without making any changes
+    [switch]$DryRun,
+
+    # Skip the interactive system requirements check
+    [switch]$SkipRequirements
+)
+
 # Ensure we're in the correct directory
 $scriptPath = $MyInvocation.MyCommand.Path
 $scriptDir  = Split-Path -Parent $scriptPath
@@ -10,21 +32,30 @@ Set-Location -Path $scriptDir
 $CONFIG = @{
     LogFile                   = Join-Path $scriptDir 'install_devops_tools.log'
     StateFile                 = Join-Path (Split-Path $scriptDir -Parent) 'devops_state.json'
-    PreferredPackageManager   = 'choco'
+    PreferredPackageManager   = $(if ($PackageManager) { $PackageManager } else { 'choco' })
     ParallelInstallation      = $false
     MaxParallelJobs           = 3
     CheckSystemRequirements   = $true
+    DryRun                    = $false
 }
 
-# Initialize logging at script start
+if ($DryRun) {
+    $CONFIG.DryRun = $true
+}
+
+# Initialize logging at script start (rotating old logs)
 if (-not (Test-Path $CONFIG.LogFile)) {
     New-Item -Path $CONFIG.LogFile -ItemType File -Force | Out-Null
+} elseif ((Get-Item $CONFIG.LogFile).Length -gt 10MB) {
+    Move-Item -Path $CONFIG.LogFile -Destination ('{0}.bak' -f $CONFIG.LogFile) -Force
 }
 
 # Function: Initialize logging
 function Initialize-Logging {
     if (-not (Test-Path $CONFIG.LogFile)) {
         New-Item -Path $CONFIG.LogFile -ItemType File -Force | Out-Null
+    } elseif ((Get-Item $CONFIG.LogFile).Length -gt 10MB) {
+        Move-Item -Path $CONFIG.LogFile -Destination ('{0}.bak' -f $CONFIG.LogFile) -Force
     }
 }
 
@@ -274,6 +305,51 @@ function Show-Tools {
     return $toolMapping
 }
 
+# Function: Add a Tool to the Selection Queue by Display Index (if not queued already)
+function Add-ToolToQueue {
+    param(
+        [int]$Index,
+        [hashtable]$Mapping,
+        [System.Collections.Generic.List[hashtable]]$Queue
+    )
+
+    if ($Mapping.ContainsKey($Index)) {
+        if ($Queue | Where-Object { $_.Package -eq $Mapping[$Index].Package }) {
+            Write-Host ('{0} is already in the queue.' -f $Mapping[$Index].Name) -ForegroundColor Gray
+        } else {
+            $Queue.Add($Mapping[$Index])
+            Write-Host ('Added [{0}] {1} to installation queue' -f $Index, $Mapping[$Index].Name) -ForegroundColor Green
+        }
+    } else {
+        Write-Host ('No tool with number {0} exists in the list.' -f $Index) -ForegroundColor Yellow
+    }
+}
+
+# Function: Parse a Selection Token like '3', '1-5' or an index list
+function Add-SelectionTokens {
+    param(
+        [string]$Choice,
+        [hashtable]$Mapping,
+        [System.Collections.Generic.List[hashtable]]$Queue
+    )
+
+    foreach ($token in ($Choice -split ',')) {
+        $token = $token.Trim()
+        if ($token -match '^(\d+)-(\d+)$') {
+            $start = [int]$Matches[1]
+            $end   = [int]$Matches[2]
+            if ($start -gt $end) { $tmp = $start; $start = $end; $end = $tmp }
+            for ($i = $start; $i -le $end; $i++) {
+                Add-ToolToQueue -Index $i -Mapping $Mapping -Queue $Queue
+            }
+        } elseif ($token -match '^\d+$') {
+            Add-ToolToQueue -Index ([int]$token) -Mapping $Mapping -Queue $Queue
+        } elseif ($token -ne '') {
+            Write-Host ('Invalid input "{0}".' -f $token) -ForegroundColor Yellow
+        }
+    }
+}
+
 # Function: Get Validation Command for a Package
 function Get-ValidationCommand {
     param([string]$PackageName)
@@ -470,53 +546,102 @@ try {
     Initialize-Logging
     Show-Header
 
-    Initialize-PackageManager
-
-    if ($CONFIG.CheckSystemRequirements -and -not (Test-SystemRequirements)) {
-        Write-Host 'System requirements not met. Please address the issues above and try again.' -ForegroundColor Red
-        exit 1
+    # -List mode: only display the catalog, no admin/package manager needed
+    if ($List) {
+        $null = Show-Tools
+        return
     }
 
-    $toolMapping    = Show-Tools
-    $selectedTools  = @()
+    # Normalize -Install into a flat list. Depending on how the script is
+    # invoked (interactive vs 'powershell -File'), the values may arrive as an
+    # array, or as one comma-separated string like 'Terraform,Git'.
+    $RequestedTools = @()
+    foreach ($item in $Install) {
+        $RequestedTools += ($item -split ',') | ForEach-Object { ('{0}' -f $_).Trim() } | Where-Object { $_ }
+    }
 
-    do {
-        $choice = Read-Host ("`nEnter the number of the tool to install (or 'done' to finish, 'q' to quit)")
-        if ($choice -eq 'q') {
-            Write-Host 'Exiting installer.' -ForegroundColor Yellow
-            exit 0
+    # Package manager + requirements checks are skipped in dry-run mode so
+    # nothing changes on the system at all.
+    if (-not $CONFIG.DryRun) {
+        Initialize-PackageManager
+
+        if ($CONFIG.CheckSystemRequirements -and -not $SkipRequirements -and -not (Test-SystemRequirements)) {
+            Write-Host 'System requirements not met. Please address the issues above and try again.' -ForegroundColor Red
+            exit 1
         }
-        if ($choice -ne 'done') {
-            try {
-                $index = [int]$choice
-                if ($toolMapping.ContainsKey($index)) {
-                    # Avoid duplicates
-                    if ($selectedTools | Where-Object { $_.Package -eq $toolMapping[$index].Package }) {
-                        Write-Host ('{0} is already in the queue.' -f $toolMapping[$index].Name) -ForegroundColor Gray
-                    } else {
-                        $selectedTools += $toolMapping[$index]
-                        Write-Host ('Added [{0}] {1} to installation queue' -f $index, $toolMapping[$index].Name) -ForegroundColor Green
-                    }
-                } else {
-                    Write-Host 'Invalid selection. Please enter a number from the list.' -ForegroundColor Yellow
+    }
+
+    $toolMapping   = Show-Tools
+    $selectedTools = [System.Collections.Generic.List[hashtable]]::new()
+
+    if ($All) {
+        # Install everything in the catalog
+        foreach ($tool in $toolMapping.Values) { $selectedTools.Add($tool) }
+        Write-Log "Queued all $($selectedTools.Count) tools (via -All)" -Level Info
+    } elseif ($RequestedTools.Count -gt 0) {
+        # Resolve requested tool names / package ids against the catalog
+        foreach ($requested in $RequestedTools) {
+            $match = $toolMapping.Values |
+                Where-Object { $_.Name -eq $requested -or $_.Package -eq $requested } |
+                Select-Object -First 1
+            if ($match) {
+                if (-not ($selectedTools | Where-Object { $_.Package -eq $match.Package })) {
+                    $selectedTools.Add($match)
                 }
-            } catch {
-                Write-Host 'Invalid input. Please enter a number or "done"' -ForegroundColor Yellow
+                Write-Log "Queued '$requested' -> $($match.Name)" -Level Info
+            } else {
+                Write-Log "Requested tool '$requested' not found in the catalog. Use -List to show available tools." -Level Error
+                Write-Host "ERROR: '$requested' is not a known tool or package id. Use -List to show available tools." -ForegroundColor Red
+                exit 1
             }
         }
-    } while ($choice -ne 'done')
+    } else {
+        do {
+            $choice = Read-Host ("`nEnter tool number(s) - single (3), range (1-5), list (2,4) or 'all' - 'l' to relist, 'done' to finish, 'q' to quit")
+            if ($choice -eq 'q') {
+                Write-Host 'Exiting installer.' -ForegroundColor Yellow
+                exit 0
+            }
+            if ($choice -in 'l', 'ls') {
+                $toolMapping = Show-Tools
+                continue
+            }
+            if ($choice -eq 'all') {
+                foreach ($tool in $toolMapping.Values) { $selectedTools.Add($tool) }
+                Write-Host ('All {0} tools queued.' -f $toolMapping.Values.Count) -ForegroundColor Green
+                continue
+            }
+            if ($choice -ne 'done') {
+                Add-SelectionTokens -Choice $choice -Mapping $toolMapping -Queue $selectedTools
+            }
+            Write-Host ("  Queue: {0} tool(s) selected" -f $selectedTools.Count) -ForegroundColor Gray
+        } while ($choice -ne 'done')
+    }
 
     if ($selectedTools.Count -eq 0) {
         Write-Host 'No tools selected for installation.' -ForegroundColor Yellow
         exit 0
     }
 
+    $results = [System.Collections.Generic.List[hashtable]]::new()
+
+    # Dry-run mode: report the plan without touching the system or state file
+    if ($CONFIG.DryRun) {
+        Write-Log 'Dry run enabled - no changes will be made' -Level Warning
+        foreach ($tool in $selectedTools) {
+            Write-Host ('  [DRY RUN] Would install {0} (package: {1})' -f $tool.Name, $tool.Package) -ForegroundColor Yellow
+            $results.Add(@{ Name = $tool.Name; Success = $true; Notes = '[DRY RUN] no changes made' })
+        }
+        Show-InstallationSummary -Results $results
+        Write-Host 'Dry run completed - nothing was installed.' -ForegroundColor Yellow
+        return
+    }
+
     Write-Host ("`nInstalling {0} selected tool(s)..." -f $selectedTools.Count) -ForegroundColor Cyan
     Write-Host ("=" * 70) -ForegroundColor Yellow
 
-    $results = [System.Collections.Generic.List[hashtable]]::new()
-    $state   = Get-InstallationState
-    $i       = 0
+    $state = Get-InstallationState
+    $i     = 0
 
     foreach ($tool in $selectedTools) {
         $i++
