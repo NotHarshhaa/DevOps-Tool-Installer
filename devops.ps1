@@ -2,10 +2,10 @@
 
 param(
     # Run a single action non-interactively and exit:
-    #   install | uninstall | update | status | info
+    #   install | uninstall | update | status | info | verify | logs
     # If omitted, the interactive menu is shown.
     [Parameter(Position = 0)]
-    [ValidateSet('', 'install', 'uninstall', 'update', 'status', 'info')]
+    [ValidateSet('', 'install', 'uninstall', 'update', 'status', 'info', 'verify', 'logs')]
     [string]$Action = '',
 
     # Skip the automatic update check at startup
@@ -241,7 +241,9 @@ function Show-Menu {
         @{ Text = "[3] Check for Updates";           Description = "Update to latest version";          Color = "Yellow" },
         @{ Text = "[4] View Installation Status";    Description = "See what's installed";              Color = "Blue" },
         @{ Text = "[5] System Information";          Description = "Display system details";            Color = "Magenta" },
-        @{ Text = "[6] Exit";                        Description = "Leave the application";             Color = "Gray" }
+        @{ Text = "[6] Verify Installed Tools";      Description = "Re-check tools against PATH";       Color = "Cyan" },
+        @{ Text = "[7] View Recent Logs";            Description = "Inspect the last log entries";      Color = "DarkCyan" },
+        @{ Text = "[8] Exit";                        Description = "Leave the application";             Color = "Gray" }
     )
 
     foreach ($item in $menuItems) {
@@ -442,6 +444,116 @@ function Show-SystemInformation {
     Write-Host ""
 }
 
+# Function: Verify tools recorded in the state file (lightweight re-check)
+function Show-ToolVerification {
+    $stateFile = $CONFIG.StateFile
+    Write-Host ""
+    Write-Host "Installed Tool Verification" -ForegroundColor Blue
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+    Write-Host ""
+
+    if (-not (Test-Path $stateFile)) {
+        Write-Host "No installation state found." -ForegroundColor Yellow
+        Write-Host "Run the installer first, then verify your tools here." -ForegroundColor Gray
+        Write-Host ""
+        return
+    }
+
+    try {
+        $state = Get-Content $stateFile | ConvertFrom-Json
+    } catch {
+        Write-Log "Failed to load installation state: $_" -Level Error
+        Write-Host "Installation state file is invalid or unreadable." -ForegroundColor Red
+        Write-Host ""
+        return
+    }
+
+    # Expected executable name per tool (lightweight check: command presence)
+    $exeMap = @{
+        'Docker Desktop'        = 'docker'
+        'Kubernetes (kubectl)'  = 'kubectl'
+        'Minikube'              = 'minikube'
+        'Helm'                  = 'helm'
+        'Istio CLI (istioctl)'  = 'istioctl'
+        'Terraform'             = 'terraform'
+        'Ansible'               = 'ansible'
+        'Packer'                = 'packer'
+        'Vagrant'               = 'vagrant'
+        'GitLab Runner'         = 'gitlab-runner'
+        'Git'                   = 'git'
+        'AWS CLI'               = 'aws'
+        'Azure CLI'             = 'az'
+        'Google Cloud SDK'      = 'gcloud'
+        'Prometheus'            = 'prometheus'
+        'Grafana'               = 'grafana'
+        'HashiCorp Vault'       = 'vault'
+        'HashiCorp Consul'      = 'consul'
+    }
+
+    $okCount = 0
+    $missingCount = 0
+    $unknownCount = 0
+
+    Write-Host ("{0,-32} {1,-15} {2}" -f "Tool", "Status", "Executable") -ForegroundColor White
+    Write-Host ("-" * 70) -ForegroundColor Gray
+
+    foreach ($prop in $state.PSObject.Properties) {
+        $toolName = $prop.Name
+        $status   = $prop.Value.status
+
+        # Only report on tools recorded as installed
+        if ($status -ne 'installed') { continue }
+
+        if (-not $exeMap.ContainsKey($toolName)) {
+            Write-Host ("{0,-32} {1,-15} {2}" -f $toolName, '[UNKNOWN]', 'no auto-check defined') -ForegroundColor Yellow
+            $unknownCount++
+            continue
+        }
+
+        $exe = $exeMap[$toolName]
+        if (Get-Command $exe -ErrorAction SilentlyContinue) {
+            Write-Host ("{0,-32} {1,-15} {2}" -f $toolName, '[OK]', $exe) -ForegroundColor Green
+            $okCount++
+        } else {
+            Write-Host ("{0,-32} {1,-15} {2}" -f $toolName, '[MISSING]', $exe) -ForegroundColor Red
+            $missingCount++
+        }
+    }
+
+    Write-Host ("-" * 70) -ForegroundColor Gray
+    Write-Host ("  OK: {0}  |  MISSING: {1}  |  Unverified: {2}" -f $okCount, $missingCount, $unknownCount) -ForegroundColor White
+    if ($missingCount -gt 0) {
+        Write-Host "  Tip: MISSING tools may need a reboot or a fresh terminal for PATH updates." -ForegroundColor Gray
+    }
+    Write-Host ""
+}
+
+# Function: Show recent log entries from all log files
+function Show-RecentLogs {
+    param([int]$Lines = 30)
+
+    $logs = @(
+        @{ Label = 'Manager log';     Path = $CONFIG.LogFile },
+        @{ Label = 'Installer log';   Path = Join-Path $PSScriptRoot 'scripts\install_devops_tools.log' },
+        @{ Label = 'Uninstaller log'; Path = Join-Path $PSScriptRoot 'scripts\devops_uninstall.log' }
+    )
+
+    Write-Host ""
+    Write-Host ("Last {0} lines of each log file" -f $Lines) -ForegroundColor Blue
+    Write-Host ("=" * 70) -ForegroundColor Yellow
+
+    foreach ($le in $logs) {
+        Write-Host ""
+        Write-Host ("{0}: {1}" -f $le.Label, $le.Path) -ForegroundColor Cyan
+        if (Test-Path $le.Path) {
+            Get-Content -Path $le.Path -Tail $Lines | ForEach-Object { Write-Host "  $_" }
+        } else {
+            Write-Host "  (no log file yet)" -ForegroundColor Gray
+        }
+    }
+    Write-Host ""
+}
+
 # Function: Invoke Script
 function Invoke-Script {
     param (
@@ -483,6 +595,8 @@ if ($Action) {
         'update'    { Test-Updates -AutoConfirm:$Yes }
         'status'    { Show-InstallationStatus }
         'info'      { Show-SystemInformation }
+        'verify'    { Show-ToolVerification }
+        'logs'      { Show-RecentLogs }
     }
     Write-Log "Action '$Action' finished" -Level Info
     exit 0
@@ -496,13 +610,13 @@ do {
     Show-Banner
     Show-Menu
 
-    Write-Host "Enter your choice (1-6): " -ForegroundColor Yellow -NoNewline
+    Write-Host "Enter your choice (1-8): " -ForegroundColor Yellow -NoNewline
     $choice = Read-Host
 
-    if ($choice -notmatch '^[1-6]$') {
+    if ($choice -notmatch '^[1-8]$') {
         Write-Host ""
-        Write-Host "Invalid choice. Please select a number between 1 and 6." -ForegroundColor Yellow
-        Write-Host "Tip: The valid options are 1, 2, 3, 4, 5, or 6" -ForegroundColor Gray
+        Write-Host "Invalid choice. Please select a number between 1 and 8." -ForegroundColor Yellow
+        Write-Host "Tip: The valid options are 1, 2, 3, 4, 5, 6, 7, or 8" -ForegroundColor Gray
         Write-Host ""
         Start-Sleep -Milliseconds 1500
         continue
@@ -514,14 +628,16 @@ do {
         "3" { Test-Updates }
         "4" { Show-InstallationStatus }
         "5" { Show-SystemInformation }
-        "6" {
+        "6" { Show-ToolVerification }
+        "7" { Show-RecentLogs }
+        "8" {
             Write-Host ""
             Write-Host "Exiting... Have a productive DevOps day!" -ForegroundColor Yellow
             exit
         }
     }
 
-    if ($choice -ne "6") {
+    if ($choice -ne "8") {
         Write-Host ""
         Write-Host "Press any key to return to main menu..." -ForegroundColor Cyan
         # RawUI.ReadKey is unavailable in some hosts (ISE, redirected I/O, CI runs)

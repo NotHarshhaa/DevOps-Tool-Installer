@@ -200,6 +200,7 @@ usage_install_sh() {
     echo -e "  ${GREEN}-p, --parallel${RESET}          Force parallel installation (default for multiple tools)"
     echo -e "  ${GREEN}-j, --jobs N${RESET}            Max parallel jobs (default ${CONFIG[MAX_PARALLEL_JOBS]})"
     echo -e "  ${GREEN}-d, --dry-run${RESET}           Show what would be installed without changing anything"
+    echo -e "  ${GREEN}-r, --retry-failed${RESET}      Reinstall tools that previously failed (from the state file)"
     echo -e "  ${GREEN}    --skip-requirements${RESET} Skip the interactive system requirements check"
     echo -e "  ${YELLOW}-h, --help${RESET}              Show this help message"
 }
@@ -914,7 +915,7 @@ main() {
     }
 
     # ---- Command line arguments (non-interactive automation support) ----
-    local CLI_MODE=false LIST_ONLY=false ALL_MODE=false DRY_RUN=false SKIP_REQUIREMENTS=false
+    local CLI_MODE=false LIST_ONLY=false ALL_MODE=false DRY_RUN=false SKIP_REQUIREMENTS=false RETRY_FAILED=false
     local INSTALL_LIST=""
 
     while [[ $# -gt 0 ]]; do
@@ -923,6 +924,7 @@ main() {
             -l|--list) LIST_ONLY=true ;;
             -i|--install) INSTALL_LIST="${2:-}"; CLI_MODE=true; shift ;;
             -a|--all) ALL_MODE=true; CLI_MODE=true ;;
+            -r|--retry-failed) RETRY_FAILED=true; CLI_MODE=true ;;
             -s|--sequential) CONFIG[PARALLEL_INSTALL]=false ;;
             -p|--parallel) CONFIG[PARALLEL_INSTALL]=true ;;
             -j|--jobs) CONFIG[MAX_PARALLEL_JOBS]="${2:-4}"; shift ;;
@@ -975,6 +977,15 @@ main() {
         for category in "${sorted_categories[@]}"; do
             tools_input+=" ${TOOL_CATEGORIES[$category]}"
         done
+    elif [[ "$RETRY_FAILED" == true ]]; then
+        # Reinstall everything previously recorded as failed in the state file
+        tools_input=$(jq -r '.[] | select(.status == "failed") | .name' "${CONFIG[STATE_FILE]}" 2>/dev/null | sort -u | tr '\n' ' ')
+        if [[ -z "$tools_input" ]]; then
+            log "INFO" "No failed installations found in the state file"
+            echo -e "${SUCCESS} No failed installations found - everything looks good."
+            exit 0
+        fi
+        echo -e "${INFO} Retrying previously failed tools: ${CYAN}${tools_input}${RESET}"
     elif [[ -n "$INSTALL_LIST" ]]; then
         tools_input="${INSTALL_LIST//,/ }"
     else

@@ -20,7 +20,10 @@ param(
     [switch]$DryRun,
 
     # Skip the interactive system requirements check
-    [switch]$SkipRequirements
+    [switch]$SkipRequirements,
+
+    # Reinstall even if the tool already validates as installed
+    [switch]$Reinstall
 )
 
 # Ensure we're in the correct directory
@@ -649,6 +652,26 @@ try {
         Write-Host ("[{0}/{1}] Installing: {2}" -f $i, $selectedTools.Count, $tool.Name) -ForegroundColor Cyan
         Write-Host ("-" * 50) -ForegroundColor Gray
 
+        # Idempotent installs: skip tools that already validate as installed
+        if (-not $Reinstall) {
+            $alreadyInstalled = $false
+            $vc = Get-ValidationCommand -PackageName $tool.Package
+            if ($null -ne $vc -and (Get-Command $vc.Exe -ErrorAction SilentlyContinue)) {
+                try {
+                    $probe = Start-Process -FilePath $vc.Exe -ArgumentList $vc.Args -NoNewWindow -Wait -PassThru -ErrorAction Stop
+                    $alreadyInstalled = ($probe.ExitCode -eq 0)
+                } catch { $alreadyInstalled = $false }
+            }
+
+            if ($alreadyInstalled) {
+                $version = Get-ToolVersion -PackageName $tool.Package
+                Write-Log "$($tool.Name) already installed (version: $version) - skipping (use -Reinstall to reinstall)" -Level Info
+                Write-Host ("{0} is already installed ({1}) - skipping" -f $tool.Name, $version) -ForegroundColor Gray
+                $results.Add(@{ Name = $tool.Name; Success = $true; Notes = "Already installed ($version)" })
+                continue
+            }
+        }
+
         $success = Install-Tool -ToolName $tool.Name -PackageName $tool.Package
 
         # Validate the installation and capture the detected version
@@ -676,6 +699,44 @@ try {
 
     Save-InstallationState -State $state
     Show-InstallationSummary -Results $results
+
+    # Offer to retry any failed installations in the same run
+    $failedTools = @($results | Where-Object { -not $_.Success })
+    if ($failedTools.Count -gt 0) {
+        Write-Host ("{0} installation(s) failed." -f $failedTools.Count) -ForegroundColor Red
+        $retry = Read-Host "Retry the failed installations now? (y/n)"
+        if ($retry -match '^[Yy]$') {
+            foreach ($failed in $failedTools) {
+                $tool = $selectedTools | Where-Object { $_.Name -eq $failed.Name } | Select-Object -First 1
+                if ($null -eq $tool) { continue }
+
+                Write-Host ""
+                Write-Host ("Retrying: {0}" -f $tool.Name) -ForegroundColor Cyan
+                $retrySuccess = Install-Tool -ToolName $tool.Name -PackageName $tool.Package
+
+                if ($retrySuccess) {
+                    $retrySuccess = Test-ToolInstallation -ToolName $tool.Name -PackageName $tool.Package
+                }
+                $version = Get-ToolVersion -PackageName $tool.Package
+
+                $state | Add-Member -NotePropertyName $tool.Name -NotePropertyValue @{
+                    status  = if ($retrySuccess) { 'installed' } else { 'failed' }
+                    date    = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+                    version = $version
+                } -Force
+
+                $entry = $results | Where-Object { $_.Name -eq $tool.Name } | Select-Object -First 1
+                if ($entry) {
+                    $entry.Success = $retrySuccess
+                    $entry.Notes = if ($retrySuccess) { "Installed OK on retry ($version)" } else { 'Retry failed — check logs' }
+                }
+                Write-Log ("Retry {0}: {1}" -f $tool.Name, $(if ($retrySuccess) { 'installed' } else { 'failed' })) -Level $(if ($retrySuccess) { 'Success' } else { 'Error' })
+            }
+
+            Save-InstallationState -State $state
+            Show-InstallationSummary -Results $results
+        }
+    }
 
     Write-Host "Installation process completed! Logs saved to:" -ForegroundColor Green
     Write-Host "  $($CONFIG.LogFile)" -ForegroundColor Gray

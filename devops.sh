@@ -401,7 +401,9 @@ show_menu() {
         "${YELLOW}[3] Check for Updates${RESET}        ${GRAY}• Update to latest version${RESET}"
         "${BLUE}[4] View Installation Status${RESET}  ${GRAY}• See what's installed${RESET}"
         "${PURPLE}[5] System Information${RESET}       ${GRAY}• Display system details${RESET}"
-        "${CYAN}[6] Exit${RESET}                    ${GRAY}• Leave the application${RESET}"
+        "${CYAN}[6] Verify Installed Tools${RESET}   ${GRAY}• Re-check tools against PATH${RESET}"
+        "${GRAY}[7] View Recent Logs${RESET}         ${GRAY}• Inspect the last log entries${RESET}"
+        "${GREEN}[8] Exit${RESET}                    ${GRAY}• Leave the application${RESET}"
     )
     
     # Display menu items
@@ -470,6 +472,108 @@ show_system_info() {
 
     echo -e "${YELLOW}════════════════════════════════════════════════════════════════════════════${RESET}"
     echo -e "${GREEN}✨ System analysis complete!${RESET}"
+    echo ""
+}
+
+# Function: Verify tools recorded in the state file (lightweight re-check)
+verify_installed_tools() {
+    echo -e "\n${BLUE}🔍 Installed Tool Verification${RESET}"
+    echo -e "${YELLOW}═════════════════════════════════════════════════════════════${RESET}"
+
+    if [[ ! -f "${CONFIG[STATE_FILE]}" ]]; then
+        echo -e "${YELLOW}No installation state found.${RESET}"
+        echo -e "${GRAY}Run the installer first, then verify your tools here.${RESET}"
+        return 0
+    fi
+
+    if ! jq empty "${CONFIG[STATE_FILE]}" 2>/dev/null; then
+        log "ERROR" "Invalid state file format"
+        echo -e "${RED}Installation state file is invalid or unreadable.${RESET}"
+        return 1
+    fi
+
+    # Expected executable name per tool id recorded by the installer
+    local -A EXE_MAP=(
+        ["docker"]="docker"
+        ["kubernetes-cli"]="kubectl"
+        ["ansible"]="ansible"
+        ["terraform"]="terraform"
+        ["helm"]="helm"
+        ["aws-cli"]="aws"
+        ["azure-cli"]="az"
+        ["google-cloud-sdk"]="gcloud"
+        ["gitlab-runner"]="gitlab-runner"
+        ["istio"]="istioctl"
+        ["minikube"]="minikube"
+        ["packer"]="packer"
+        ["vagrant"]="vagrant"
+        ["git"]="git"
+        ["prometheus"]="prometheus"
+        ["grafana"]="grafana"
+        ["vault"]="vault"
+        ["consul"]="consul"
+        ["argocd"]="argocd"
+        ["podman"]="podman"
+        ["k9s"]="k9s"
+        ["flux"]="flux"
+    )
+
+    printf "  %-22s %-12s %s\n" "Tool" "Status" "Executable"
+    echo "  ------------------------------------------------------------"
+
+    local ok=0 missing=0 unknown=0
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        local exe="${EXE_MAP[$name]:-}"
+        if [[ -z "$exe" ]]; then
+            printf "  %-22s ${YELLOW}%-12s${RESET} %s\n" "$name" "[UNVERIFIED]" "no auto-check defined"
+            ((unknown++))
+        elif command -v "$exe" >/dev/null 2>&1; then
+            printf "  %-22s ${GREEN}%-12s${RESET} %s\n" "$name" "[OK]" "$exe"
+            ((ok++))
+        else
+            printf "  %-22s ${RED}%-12s${RESET} %s\n" "$name" "[MISSING]" "$exe"
+            ((missing++))
+        fi
+    done < <(jq -r '.[] | select(.status == "installed") | .name' "${CONFIG[STATE_FILE]}" 2>/dev/null)
+
+    echo "  ------------------------------------------------------------"
+    echo -e "  Summary: ${GREEN}${ok} OK${RESET} | ${RED}${missing} missing${RESET} | ${YELLOW}${unknown} unverifiable${RESET}"
+    if [[ $missing -gt 0 ]]; then
+        echo -e "  ${GRAY}Tip: MISSING tools may need a new login shell for PATH updates.${RESET}"
+    fi
+    echo ""
+    return 0
+}
+
+# Function: Show recent log entries (launcher + latest installer/uninstaller logs)
+view_recent_logs() {
+    local lines=${1:-30}
+    echo -e "\n${BLUE}📜 Recent Log Entries (last ${lines} lines of each log)${RESET}"
+    echo -e "${YELLOW}═════════════════════════════════════════════════════════════${RESET}"
+
+    # Collect candidate logs: manager log plus newest installer/uninstaller runs
+    local candidates=()
+    candidates+=("Manager log|${CONFIG[LOG_FILE]}")
+    if ls "$SCRIPT_DIR/logs/install/"install_*.log >/dev/null 2>&1; then
+        candidates+=("Installer log|$(ls -t "$SCRIPT_DIR/logs/install/"install_*.log 2>/dev/null | head -n1)")
+    fi
+    if ls "$SCRIPT_DIR/logs/uninstall/"uninstall_*.log >/dev/null 2>&1; then
+        candidates+=("Uninstaller log|$(ls -t "$SCRIPT_DIR/logs/uninstall/"uninstall_*.log 2>/dev/null | head -n1)")
+    fi
+
+    local entry label path
+    for entry in "${candidates[@]}"; do
+        label="${entry%%|*}"
+        path="${entry#*|}"
+        echo ""
+        echo -e "${CYAN}${label}:${RESET} $path"
+        if [[ -f "$path" ]]; then
+            tail -n "$lines" "$path" | sed 's/^/  /'
+        else
+            echo -e "  ${GRAY}(no log file yet)${RESET}"
+        fi
+    done
     echo ""
 }
 
@@ -595,6 +699,8 @@ usage() {
     echo -e "  ${GREEN}update${RESET}       Check for updates"
     echo -e "  ${GREEN}status${RESET}       Show installation status"
     echo -e "  ${GREEN}info${RESET}         Show system information"
+    echo -e "  ${GREEN}verify${RESET}       Re-check installed tools based on the state file"
+    echo -e "  ${GREEN}logs${RESET}         View recent log entries"
     echo -e "  ${GREEN}menu${RESET}         Interactive menu (default)"
     echo ""
     echo -e "Options:"
@@ -609,7 +715,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         -s|--skip-update) SKIP_UPDATE=true ;;
-        install|uninstall|update|status|info|menu) ACTION="$1" ;;
+        install|uninstall|update|status|info|verify|logs|menu) ACTION="$1" ;;
         *) echo -e "${RED}Unknown option or action: $1${RESET}"; usage; exit 1 ;;
     esac
     shift
@@ -667,6 +773,14 @@ case "$ACTION" in
         show_system_info
         exit 0
         ;;
+    verify)
+        verify_installed_tools
+        exit $?
+        ;;
+    logs)
+        view_recent_logs
+        exit 0
+        ;;
 esac
 
 # Interactive menu mode: pre-flight checks (skipped when piping/output-redir
@@ -681,14 +795,14 @@ while true; do
     show_menu
 
     # Enhanced input prompt
-    echo -e "${YELLOW}👉 Enter your choice (1-6): ${RESET}"
+    echo -e "${YELLOW}👉 Enter your choice (1-8): ${RESET}"
     read -rp "" choice
     
     # Validate input
-    if [[ ! "$choice" =~ ^[1-6]$ ]]; then
+    if [[ ! "$choice" =~ ^[1-8]$ ]]; then
         echo ""
-        echo -e "${YELLOW}⚠️  Invalid choice. Please select a number between 1 and 6.${RESET}"
-        echo -e "${GRAY}💡 Tip: The valid options are 1, 2, 3, 4, 5, or 6${RESET}"
+        echo -e "${YELLOW}⚠️  Invalid choice. Please select a number between 1 and 8.${RESET}"
+        echo -e "${GRAY}💡 Tip: The valid options are 1, 2, 3, 4, 5, 6, 7, or 8${RESET}"
         echo ""
         sleep 1.5
         continue
@@ -727,6 +841,14 @@ while true; do
             wait_for_keypress
             ;;
         6)
+            verify_installed_tools
+            wait_for_keypress
+            ;;
+        7)
+            view_recent_logs
+            wait_for_keypress
+            ;;
+        8)
             shutdown
             ;;
     esac
